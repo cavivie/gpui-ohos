@@ -36,7 +36,6 @@ resolver = "2"
 exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]
 
 [patch.crates-io]
-ohos-ime-binding = { path = "../../../ohos-rs/ohos-native-bindings/crates/ime" }
 ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
 ohos-accessibility-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
 ohos-xcomponent-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
