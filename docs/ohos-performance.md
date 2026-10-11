@@ -7,17 +7,23 @@ unchanged at `f45c7c22d0`.
 
 ## Runtime ownership
 
-- `OhosDispatcher` reuses 2–8 base workers. This is not a concurrency ceiling:
-  if queued work makes no progress for 10 ms, a sleeping monitor starts another
-  worker. Additional workers retire after 1 second without work. This preserves
-  synchronous waits on child tasks and externally queued work. The queue uses
-  GPUI's 60/30/10 priority weights and FIFO within each priority. Realtime work
-  retains its dedicated thread. Neither the monitor nor timer thread polls an
-  empty queue. Shutdown wakes them and releases queued tasks.
-- One timer thread owns the deadline heap. Foreground tasks and expired timers
-  execute on the UI thread; each UI turn processes up to 64 tasks or 2 ms and
-  posts a continuation for remaining work. Background completions explicitly
-  wake the UI, including when the screen has no animation.
+- `OhosDispatcher` reuses 2–8 base workers, with a hard limit of 64 live workers.
+  If queued work stalls for 10 ms and OS scheduling state shows insufficient
+  capacity, a sleeping monitor starts another worker below that limit.
+  Observations without growth back off to 100 ms. Dequeues notify only once per
+  backed-off wait; progress, an empty queue, or growth resets the interval to
+  10 ms. Additional workers retire after 1 second without work. Below the
+  limit, this preserves synchronous waits on child tasks and externally queued
+  work. The queue uses GPUI's 60/30/10 priority weights and FIFO within each
+  priority. Realtime work retains its dedicated thread. Neither the monitor nor
+  timer thread polls an empty queue. Shutdown wakes them and releases queued
+  tasks.
+- One timer thread owns the deadline heap and executes expired timer runnables
+  without holding the timer lock, in deadline order and FIFO for equal deadlines.
+  Awakened futures resume through their own executors. Foreground tasks execute
+  on the UI thread; each UI turn processes up to 64 tasks or 2 ms and posts a
+  continuation for remaining work. Scheduling foreground work wakes the UI,
+  including when the screen has no animation.
 - Windows share `MainWake` to coalesce native wake events. Each window retains
   an independent atomic frame state and generation ticket. A callback from an
   earlier surface/visibility generation cannot clear a new request.
@@ -51,9 +57,10 @@ cargo clippy --manifest-path tests/touch/Cargo.toml --locked -- -D warnings
 cargo fmt --manifest-path tests/touch/Cargo.toml --check
 ```
 
-33 regressions cover gestures, frame generations, wake coalescing, timers,
-blocking background tasks, priority fairness, shutdown, cache variants and
-pixel conversion. ARM64 Release integration built successfully.
+47 regressions cover gestures, frame generations, viewport deduplication, wake
+coalescing, timers, blocking background tasks, worker limits, monitor backoff,
+priority fairness, shutdown, cache variants and pixel conversion. ARM64
+Release integration built successfully.
 
 The same standalone GPUI example was measured before and after optimization:
 

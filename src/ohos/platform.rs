@@ -566,10 +566,7 @@ impl OhosPlatform {
         self.dispatcher.begin_main_turn();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2);
         for _ in 0..64 {
-            let runnable = self
-                .dispatcher
-                .take_due_timer()
-                .or_else(|| self.main_receiver.borrow_mut().try_pop().ok().flatten());
+            let runnable = self.main_receiver.borrow_mut().try_pop().ok().flatten();
             let Some(runnable) = runnable else {
                 return;
             };

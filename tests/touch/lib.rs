@@ -211,6 +211,41 @@ mod tests {
         dispatcher.shutdown();
     }
     #[test]
+    fn blocked_workers_stop_growing_at_the_limit_and_resume_queued_work() {
+        let (sender, _) = PriorityQueueReceiver::new();
+        let dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
+        let executor = BackgroundExecutor::new(dispatcher.clone());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let mut releases = Vec::new();
+        for _ in 0..65 {
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            releases.push(tx);
+            let started = started_tx.clone();
+            let done = done_tx.clone();
+            executor
+                .spawn(async move {
+                    started.send(()).unwrap();
+                    let _ = rx.recv();
+                    let _ = done.send(());
+                })
+                .detach();
+        }
+        for _ in 0..64 {
+            started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        drop(releases);
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        for _ in 0..65 {
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        dispatcher.shutdown();
+    }
+    #[test]
     fn main_queue_wakes_once_per_burst_and_rearms_after_pumping() {
         let (sender, queue) = PriorityQueueReceiver::new();
         let dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
@@ -241,45 +276,68 @@ mod tests {
         dispatcher.shutdown();
     }
     #[test]
-    fn due_timer_wakes_and_runs_on_the_ui_thread() {
-        let (sender, _) = PriorityQueueReceiver::new();
+    fn foreground_future_resumes_after_timer_fires_without_ui_timer_pumping() {
+        let (sender, queue) = PriorityQueueReceiver::new();
         let dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
         let wake = OpenHarmonyWaker::default();
         dispatcher.set_waker(wake.clone());
         dispatcher.begin_main_turn();
-        let executor = BackgroundExecutor::new(dispatcher.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-        executor
+        let foreground = ForegroundExecutor::new(dispatcher.clone());
+        let background = BackgroundExecutor::new(dispatcher.clone());
+        let done = std::rc::Rc::new(std::cell::Cell::new(false));
+        let observed = done.clone();
+        let ui_thread = std::thread::current().id();
+        foreground
             .spawn(async move {
+                background.timer(Duration::from_millis(10)).await;
+                assert_eq!(std::thread::current().id(), ui_thread);
+                observed.set(true);
+            })
+            .detach();
+        queue.0.pop().unwrap().run();
+        dispatcher.begin_main_turn();
+        let resumed = queue.0.pop_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!done.get());
+        resumed.run();
+        assert!(done.get());
+        dispatcher.shutdown();
+    }
+    #[test]
+    fn background_timer_completes_while_ui_thread_runs_no_tasks() {
+        let (sender, queue) = PriorityQueueReceiver::new();
+        let dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
+        let wake = OpenHarmonyWaker::default();
+        dispatcher.set_waker(wake.clone());
+        dispatcher.begin_main_turn();
+        let before = wake.calls.load(Ordering::Relaxed);
+        let background = BackgroundExecutor::new(dispatcher.clone());
+        let executor = background.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        background
+            .spawn(async move {
+                executor.timer(Duration::from_millis(10)).await;
                 tx.send(()).unwrap();
             })
             .detach();
         rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        // A foreground future arms its timer from the creating UI thread.
-        let (sender, queue) = PriorityQueueReceiver::new();
-        let timer_dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
-        timer_dispatcher.set_waker(wake.clone());
-        timer_dispatcher.begin_main_turn();
-        let foreground = ForegroundExecutor::new(timer_dispatcher.clone());
-        let background = BackgroundExecutor::new(timer_dispatcher.clone());
-        let done = Arc::new(AtomicUsize::new(0));
-        let observed = done.clone();
-        foreground
-            .spawn(async move {
-                background.timer(Duration::from_millis(10)).await;
-                observed.store(1, Ordering::Relaxed);
-            })
-            .detach();
-        queue.0.pop().unwrap().run();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !timer_dispatcher.has_due_timers() {
-            assert!(Instant::now() < deadline);
-            std::thread::yield_now();
-        }
-        timer_dispatcher.take_due_timer().unwrap().run();
-        queue.0.pop().unwrap().run();
-        assert_eq!(done.load(Ordering::Relaxed), 1);
-        timer_dispatcher.shutdown();
+        assert_eq!(wake.calls.load(Ordering::Relaxed), before);
+        assert!(queue.0.pop_timeout(Duration::ZERO).is_none());
+        dispatcher.shutdown();
+    }
+    #[test]
+    fn ui_thread_can_block_with_timeout_on_a_background_timer() {
+        let (sender, _) = PriorityQueueReceiver::new();
+        let dispatcher = Arc::new(dispatcher::OhosDispatcher::new(sender));
+        let background = BackgroundExecutor::new(dispatcher.clone());
+        let foreground = ForegroundExecutor::new(dispatcher.clone());
+        assert!(
+            foreground
+                .block_with_timeout(
+                    Duration::from_secs(1),
+                    background.timer(Duration::from_millis(10)),
+                )
+                .is_ok()
+        );
         dispatcher.shutdown();
     }
     #[test]

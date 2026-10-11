@@ -1,4 +1,7 @@
-use super::{task_queue::TaskQueue, worker_state::WorkerState};
+use super::{
+    task_queue::{StallBackoff, TaskQueue},
+    worker_state::WorkerState,
+};
 use crate::RunnableVariant;
 use std::{
     io,
@@ -9,6 +12,8 @@ use std::{
     thread,
     time::Duration,
 };
+
+const MAX_WORKERS: usize = 64;
 
 #[derive(Default)]
 struct Worker {
@@ -47,24 +52,43 @@ impl Workers {
             .name("OhosWorkerMonitor".into())
             .spawn(move || {
                 let mut index = count;
-                while queue.wait_for_stalled_work(Duration::from_millis(10)) {
-                    let capacity = {
+                let mut backoff = StallBackoff::default();
+                let mut saturated = false;
+                while queue.wait_for_stalled_work(&mut backoff) {
+                    let (total, capacity) = {
                         let mut workers = workers.lock().unwrap_or_else(|e| e.into_inner());
                         workers.retain(|worker| Weak::strong_count(worker) != 0);
-                        workers
+                        let capacity = workers
                             .iter()
                             .filter_map(Weak::upgrade)
                             .filter(|worker| worker.available_capacity())
-                            .count()
+                            .count();
+                        (workers.len(), capacity)
                     };
-                    // Elapsed time only schedules an observation. Actual OS wait
-                    // state decides growth; CPU work cannot trigger expansion.
-                    if capacity >= count {
+                    if total >= MAX_WORKERS {
+                        if !saturated {
+                            log::warn!(
+                                "OHOS worker pool reached its limit of {MAX_WORKERS} workers"
+                            );
+                        }
+                        saturated = true;
+                        backoff.back_off();
                         continue;
                     }
-                    if let Err(error) = Self::spawn(queue.clone(), &workers, index, true) {
-                        log::error!("Cannot supplement blocked OHOS workers: {error}");
-                        thread::sleep(Duration::from_secs(1));
+                    saturated = false;
+                    // Elapsed time only schedules an observation. OS wait state
+                    // decides growth when kernel introspection is available.
+                    if capacity >= count {
+                        backoff.back_off();
+                        continue;
+                    }
+                    match Self::spawn(queue.clone(), &workers, index, true) {
+                        Ok(()) => backoff.reset(),
+                        Err(error) => {
+                            log::error!("Cannot supplement blocked OHOS workers: {error}");
+                            thread::sleep(Duration::from_secs(1));
+                            backoff.back_off();
+                        }
                     }
                     index = index.wrapping_add(1);
                 }
