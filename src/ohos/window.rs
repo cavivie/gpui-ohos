@@ -37,11 +37,11 @@ use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
-    A11yCallbacks, AnyWindowHandle, Bounds, Capslock, DevicePixels, Edges, ForegroundExecutor,
-    GestureTuning, GpuSpecs, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay,
-    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task,
+    A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
+    ForegroundExecutor, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformAtlas,
+    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
+    PromptLevel, RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task,
     TextInputAction, TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowInsets, WindowParams, WindowVisibility, accesskit, point, px, size,
@@ -61,6 +61,7 @@ pub(crate) struct OhosWindowContext {
     pub(crate) frame_wake: Arc<super::dispatcher::MainWake>,
     pub(crate) clipboard: super::clipboard::OhosClipboard,
     pub(crate) cursor_hidden_until_move: Rc<Cell<bool>>,
+    pub(crate) cursor_style: Rc<Cell<Option<(i64, CursorStyle)>>>,
     pub(crate) appearance_override: Rc<Cell<Option<WindowAppearance>>>,
     pub(crate) window_id: i64,
     pub(crate) fallback_atlas: Option<Arc<WgpuAtlas>>,
@@ -108,11 +109,13 @@ pub(crate) struct OhosWindow {
     callbacks: Rc<RefCell<WindowCallbacks>>,
     renderer: RefCell<Option<WgpuRenderer>>,
     surface_available: Cell<bool>,
+    force_render: Cell<bool>,
     gpu_context: Arc<WgpuContext>,
     display: OhosDisplay,
     fallback_atlas: RefCell<Option<Arc<WgpuAtlas>>>,
     foreground_executor: ForegroundExecutor,
     cursor_hidden_until_move: Rc<Cell<bool>>,
+    cursor_style: Rc<Cell<Option<(i64, CursorStyle)>>>,
     keyboard_visible: Rc<Cell<bool>>,
     ime_action: Cell<TextInputAction>,
     pointer_position: Cell<Option<Point<Pixels>>>,
@@ -223,11 +226,6 @@ impl OhosWindowHandle {
     fn with_window<R>(&self, f: impl FnOnce(&OhosWindow) -> R) -> R {
         let window = self.inner.borrow();
         f(&window)
-    }
-
-    fn with_window_mut<R>(&self, f: impl FnOnce(&mut OhosWindow) -> R) -> R {
-        let mut window = self.inner.borrow_mut();
-        f(&mut window)
     }
 }
 
@@ -369,6 +367,7 @@ impl OhosWindow {
             frame_wake,
             clipboard,
             cursor_hidden_until_move,
+            cursor_style,
             appearance_override,
             window_id,
             fallback_atlas,
@@ -452,11 +451,13 @@ impl OhosWindow {
             })),
             renderer: RefCell::new(None),
             surface_available: Cell::new(false),
+            force_render: Cell::new(false),
             gpu_context,
             display,
             fallback_atlas: RefCell::new(fallback_atlas),
             foreground_executor,
             cursor_hidden_until_move,
+            cursor_style,
             keyboard_visible: Rc::new(Cell::new(false)),
             ime_action: Cell::new(TextInputAction::Unspecified),
             pointer_position: Cell::new(None),
@@ -551,7 +552,7 @@ impl OhosWindow {
         if let Some(ref mut callback) = callback {
             callback(RequestFrameOptions {
                 require_presentation: false,
-                force_render: false,
+                force_render: self.force_render.replace(false),
             });
         }
         self.callbacks.borrow_mut().request_frame = callback;
@@ -1001,7 +1002,7 @@ impl OhosWindow {
         // A show request does not prove that an on-screen keyboard occupies
         // the window. Without keyboard geometry, system/navigation bars are
         // only safe-area insets; counting them here shrinks the viewport twice.
-        if !keyboard_area.is_some_and(|area| area.bottom_rect.height > 0) {
+        if keyboard_area.is_none_or(|area| area.bottom_rect.height <= 0) {
             return Some(0);
         }
         if !(self.keyboard_visible.get() || keyboard_avoid_visible) {
@@ -1168,6 +1169,9 @@ impl OhosWindow {
         if self.hovered.replace(hovered) == hovered {
             return;
         }
+        if hovered {
+            self.cursor_style.set(None);
+        }
         let mut callback = self.callbacks.borrow_mut().hover_status_change.take();
         if let Some(ref mut callback) = callback {
             callback(hovered);
@@ -1302,11 +1306,11 @@ impl OhosWindow {
     fn apply_requested_background(&self) {
         if self.requested_background.get().is_none()
             || self.background_pending.get()
-            || !self
+            || self
                 .app
                 .borrow()
                 .as_ref()
-                .is_some_and(|app| app.native_window_for(self.window_id).is_some())
+                .is_none_or(|app| app.native_window_for(self.window_id).is_none())
         {
             return;
         }
@@ -1477,6 +1481,54 @@ impl OhosWindow {
             .detach();
     }
 
+    fn request_title(&self, title: &str) {
+        *self.title.borrow_mut() = title.to_owned();
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        if app.native_window_for(self.window_id).is_none() {
+            return;
+        }
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let window_id = self.window_id;
+        let requested = title.to_owned();
+        let generation = self.title_generation.clone();
+        let token = generation.get().wrapping_add(1);
+        generation.set(token);
+        self.foreground_executor
+            .spawn(async move {
+                if generation.get() != token {
+                    return;
+                }
+                if let Err(error) = client.set_window_title(window_id, requested).await {
+                    warn!("Failed to set OHOS window title: {error}");
+                }
+            })
+            .detach();
+    }
+
+    fn request_app_id(&self, _app_id: &str) {
+        // Not supported on OHOS
+    }
+
+    fn request_map(&self) -> Result<()> {
+        anyhow::ensure!(!self.closed.get(), "Cannot map a closed OHOS window");
+        let client = self
+            .window_client()
+            .ok_or_else(|| anyhow::anyhow!("OHOS window bridge is unavailable"))?;
+        let window_id = self.window_id;
+        self.foreground_executor
+            .spawn(async move {
+                if let Err(error) = client.show_window(window_id).await {
+                    warn!("Failed to map OHOS window: {error}");
+                }
+            })
+            .detach();
+        Ok(())
+    }
+
     fn request_resize(&self, size: Size<Pixels>) {
         let Some(client) = self.window_client() else {
             return;
@@ -1527,9 +1579,11 @@ impl OhosWindow {
 
     fn emit_resize_callback(&self) {
         let scale = *self.scale.borrow();
+        let bounds_size = self.bounds.borrow().size;
         let content_size = self.effective_content_size();
         let mut callback = self.callbacks.borrow_mut().resize.take();
-        self.viewport.publish(content_size, scale, &mut callback);
+        self.viewport
+            .publish(bounds_size, content_size, scale, &mut callback);
         self.callbacks.borrow_mut().resize = callback;
     }
 
@@ -1641,6 +1695,8 @@ impl OhosWindow {
 
         *self.fallback_atlas.borrow_mut() = Some(renderer.sprite_atlas().clone());
         *renderer_guard = Some(renderer);
+        self.force_render.set(true);
+        self.schedule_frame();
         debug!("OhosWindow: Renderer initialized successfully");
         Ok(())
     }
@@ -1662,6 +1718,7 @@ impl OhosWindow {
         match event {
             Event::SurfaceCreate => {
                 self.surface_available.set(true);
+                self.cursor_style.set(None);
                 if let Some(scheduler) = &self.frame_scheduler {
                     scheduler.set_active(self.visibility.get() == WindowVisibility::Visible);
                 }
@@ -1754,7 +1811,7 @@ impl OhosWindow {
                 let new_size = size(px(width / scale), px(height / scale));
                 let origin = self.bounds.borrow().origin;
                 *self.bounds.borrow_mut() = Bounds::new(origin, new_size);
-                self.refresh_keyboard_overlap_device_px();
+                let overlap_changed = self.refresh_keyboard_overlap_device_px();
 
                 // Update renderer's drawable size
                 if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
@@ -1764,7 +1821,11 @@ impl OhosWindow {
                     };
                     renderer.update_drawable_size(device_size);
                 }
-                self.emit_resize_callback();
+                if overlap_changed {
+                    self.emit_visual_viewport_changed();
+                } else {
+                    self.emit_resize_callback();
+                }
                 self.refresh_insets();
             }
             Event::ContentRectChange(info) if info.window_id == self.window_id => {
@@ -1810,17 +1871,16 @@ impl OhosWindow {
             }
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
-            Event::WindowRedraw(_) => {
-                // The platform event loop already drains pending GPUI VSync
-                // frames. Drawing again for XComponent's continuous callback
-                // can advance momentum and submit a second frame in one VSync.
+            Event::WindowRedraw(_)
                 if self
                     .frame_scheduler
                     .as_ref()
-                    .is_none_or(|scheduler| scheduler.state.failed())
-                {
-                    self.draw_requested_frame();
-                }
+                    .is_none_or(|scheduler| scheduler.state.failed()) =>
+            {
+                // The platform event loop already drains pending GPUI VSync
+                // frames. Drawing again for XComponent's continuous callback
+                // can advance momentum and submit a second frame in one VSync.
+                self.draw_requested_frame();
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
@@ -2846,7 +2906,7 @@ impl PlatformWindow for OhosWindowHandle {
     }
 
     fn set_title(&mut self, title: &str) {
-        self.with_window_mut(|window| window.set_title(title))
+        self.with_window(|window| window.request_title(title))
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
@@ -3001,11 +3061,11 @@ impl PlatformWindow for OhosWindowHandle {
     }
 
     fn set_app_id(&mut self, app_id: &str) {
-        self.with_window_mut(|window| window.set_app_id(app_id))
+        self.with_window(|window| window.request_app_id(app_id))
     }
 
     fn map_window(&mut self) -> Result<()> {
-        self.with_window_mut(|window| window.map_window())
+        self.with_window(|window| window.request_map())
     }
 
     fn window_controls(&self) -> WindowControls {
@@ -3200,31 +3260,7 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn set_title(&mut self, title: &str) {
-        *self.title.borrow_mut() = title.to_owned();
-        let Some(app) = self.app.borrow().clone() else {
-            return;
-        };
-        if app.native_window_for(self.window_id).is_none() {
-            return;
-        }
-        let Some(client) = self.window_client() else {
-            return;
-        };
-        let window_id = self.window_id;
-        let requested = title.to_owned();
-        let generation = self.title_generation.clone();
-        let token = generation.get().wrapping_add(1);
-        generation.set(token);
-        self.foreground_executor
-            .spawn(async move {
-                if generation.get() != token {
-                    return;
-                }
-                if let Err(error) = client.set_window_title(window_id, requested).await {
-                    warn!("Failed to set OHOS window title: {error}");
-                }
-            })
-            .detach();
+        self.request_title(title)
     }
 
     fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
@@ -3274,7 +3310,7 @@ impl PlatformWindow for OhosWindow {
                 let result = if next {
                     client.maximize_window(window_id).await
                 } else {
-                    client.restore_window(window_id).await
+                    client.recover_window(window_id).await
                 };
                 match result {
                     Ok(()) => state.set(next),
@@ -3469,11 +3505,11 @@ impl PlatformWindow for OhosWindow {
         self.requested_decorations.set(decorations);
         // GPUI can request decorations before asynchronous OS window creation
         // finishes. SurfaceCreate reapplies the retained request once ready.
-        if !self
+        if self
             .app
             .borrow()
             .as_ref()
-            .is_some_and(|app| app.native_window_for(self.window_id).is_some())
+            .is_none_or(|app| app.native_window_for(self.window_id).is_none())
         {
             return;
         }
@@ -3715,24 +3751,12 @@ impl PlatformWindow for OhosWindow {
         }
     }
 
-    fn set_app_id(&mut self, _app_id: &str) {
-        // Not supported on OHOS
+    fn set_app_id(&mut self, app_id: &str) {
+        self.request_app_id(app_id)
     }
 
     fn map_window(&mut self) -> Result<()> {
-        anyhow::ensure!(!self.closed.get(), "Cannot map a closed OHOS window");
-        let client = self
-            .window_client()
-            .ok_or_else(|| anyhow::anyhow!("OHOS window bridge is unavailable"))?;
-        let window_id = self.window_id;
-        self.foreground_executor
-            .spawn(async move {
-                if let Err(error) = client.show_window(window_id).await {
-                    warn!("Failed to map OHOS window: {error}");
-                }
-            })
-            .detach();
-        Ok(())
+        self.request_map()
     }
 
     fn window_controls(&self) -> WindowControls {

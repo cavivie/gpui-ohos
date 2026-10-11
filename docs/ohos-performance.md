@@ -28,8 +28,8 @@ unchanged at `f45c7c22d0`.
   a fresh frame and retries native VSync after a failed render session.
 - The window index routes borrowed input directly to its owner. Global events
   still reach every live window. `SmallVec` has four inline entries and grows
-  on the heap; four is not a window limit. Equal effective geometry skips a
-  redundant resize callback.
+  on the heap; four is not a window limit. Resize callbacks are deduplicated
+  only when full bounds, effective content size and scale are all unchanged.
 - `WgpuContext` owns common shader/layout handles and caches pipelines by surface
   format, alpha mode, path sample count and dual-source blending. Window buffers,
   uniforms and surface textures retain their existing ownership; atlas reuse

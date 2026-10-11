@@ -113,8 +113,9 @@ pub(crate) struct OhosPlatform {
     appearance_override: Rc<Cell<Option<WindowAppearance>>>,
     clipboard: super::clipboard::OhosClipboard,
     cursor_hidden_until_move: Rc<Cell<bool>>,
+    cursor_style: Rc<Cell<Option<(i64, CursorStyle)>>>,
     cursor_window_id: Rc<Cell<i64>>,
-    idle_sleep_guards: Arc<AtomicUsize>,
+    idle_sleep: Arc<Mutex<IdleSleepState>>,
     menus: Rc<RefCell<MenuState>>,
     menu_events: Arc<Mutex<VecDeque<String>>>,
     menu_open_events: Arc<AtomicUsize>,
@@ -129,6 +130,81 @@ struct MenuState {
     on_action: Option<MenuActionCallback>,
     on_will_open: Option<Box<dyn FnMut()>>,
     on_validate: Option<MenuValidationCallback>,
+}
+
+#[derive(Default)]
+struct IdleSleepState {
+    guards: usize,
+    applied: bool,
+    reconciling: bool,
+    waiters: Vec<oneshot::Sender<Result<ActivityGuard>>>,
+}
+
+fn reconcile_idle_sleep(
+    state: Arc<Mutex<IdleSleepState>>,
+    client: WindowClient,
+    background: BackgroundExecutor,
+) {
+    {
+        let mut state = state.lock().unwrap();
+        if state.reconciling {
+            return;
+        }
+        state.reconciling = true;
+    }
+    background
+        .clone()
+        .spawn(async move {
+            loop {
+                let (desired, waiters) = {
+                    let mut state = state.lock().unwrap();
+                    let desired = state.guards > 0;
+                    let waiters = if desired == state.applied {
+                        state.reconciling = false;
+                        Some(std::mem::take(&mut state.waiters))
+                    } else {
+                        None
+                    };
+                    (desired, waiters)
+                };
+                if let Some(waiters) = waiters {
+                    for waiter in waiters {
+                        let state = state.clone();
+                        let client = client.clone();
+                        let background = background.clone();
+                        let guard = ActivityGuard::new(move || {
+                            state.lock().unwrap().guards -= 1;
+                            reconcile_idle_sleep(state, client, background);
+                        });
+                        let _ = waiter.send(Ok(guard));
+                    }
+                    return;
+                }
+                match client.set_keep_screen_on(0, desired).await {
+                    Ok(()) => state.lock().unwrap().applied = desired,
+                    Err(error) => {
+                        warn!("Failed to set OHOS keep screen on to {desired}: {error}");
+                        let waiters = {
+                            let mut state = state.lock().unwrap();
+                            if desired {
+                                let waiters = std::mem::take(&mut state.waiters);
+                                state.guards -= waiters.len();
+                                waiters
+                            } else if state.guards == 0 {
+                                state.reconciling = false;
+                                return;
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        for waiter in waiters {
+                            let _ = waiter.send(Err(anyhow::anyhow!(error.to_string())));
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
 }
 
 fn apply_menu_validation(items: &mut [MenuItemData], enabled: &HashMap<String, bool>) -> bool {
@@ -357,8 +433,9 @@ impl OhosPlatform {
             appearance_override: Rc::new(Cell::new(None)),
             clipboard,
             cursor_hidden_until_move: Rc::new(Cell::new(false)),
+            cursor_style: Rc::new(Cell::new(None)),
             cursor_window_id: Rc::new(Cell::new(0)),
-            idle_sleep_guards: Arc::new(AtomicUsize::new(0)),
+            idle_sleep: Arc::new(Mutex::new(IdleSleepState::default())),
             menus: Rc::new(RefCell::new(MenuState::default())),
             menu_events,
             menu_open_events,
@@ -1241,23 +1318,31 @@ fn selected_paths(uris: Vec<String>, writable: bool) -> Result<Option<Vec<PathBu
         return Ok(None);
     }
     let operation_mode = if writable { 3 } else { 1 };
-    let policies = uris
+    let mut policies = uris
         .iter()
         .map(|uri| ohos_fileshare_binding::PolicyInfo {
             uri: uri.clone(),
             operation_mode,
         })
         .collect::<Vec<_>>();
-    let failed = ohos_fileshare_binding::persist_permission(&policies)?;
-    anyhow::ensure!(
-        failed.is_empty(),
-        "Could not persist file picker permission: {failed:?}"
-    );
-    let failed = ohos_fileshare_binding::activate_permission(&policies)?;
-    anyhow::ensure!(
-        failed.is_empty(),
-        "Could not activate file picker permission: {failed:?}"
-    );
+    match ohos_fileshare_binding::persist_permission(&policies) {
+        Ok(failed) => {
+            if !failed.is_empty() {
+                warn!("Could not persist file picker permission: {failed:?}");
+                policies.retain(|policy| !failed.iter().any(|error| error.uri == policy.uri));
+            }
+            if !policies.is_empty() {
+                match ohos_fileshare_binding::activate_permission(&policies) {
+                    Ok(failed) if !failed.is_empty() => {
+                        warn!("Could not activate file picker permission: {failed:?}");
+                    }
+                    Err(error) => warn!("Could not activate file picker permission: {error}"),
+                    _ => {}
+                }
+            }
+        }
+        Err(error) => warn!("Could not persist file picker permission: {error}"),
+    }
     let paths = uris
         .iter()
         .map(|uri| {
@@ -1333,8 +1418,9 @@ impl Clone for OhosPlatform {
             appearance_override: self.appearance_override.clone(),
             clipboard: self.clipboard.clone(),
             cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
+            cursor_style: self.cursor_style.clone(),
             cursor_window_id: self.cursor_window_id.clone(),
-            idle_sleep_guards: self.idle_sleep_guards.clone(),
+            idle_sleep: self.idle_sleep.clone(),
             menus: self.menus.clone(),
             menu_events: self.menu_events.clone(),
             menu_open_events: self.menu_open_events.clone(),
@@ -1649,6 +1735,7 @@ impl Platform for OhosPlatform {
                 frame_wake: self.dispatcher.frame_waker(),
                 clipboard: self.clipboard.clone(),
                 cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
+                cursor_style: self.cursor_style.clone(),
                 appearance_override: self.appearance_override.clone(),
                 window_id,
                 fallback_atlas,
@@ -2060,18 +2147,26 @@ impl Platform for OhosPlatform {
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        let style = ohos_cursor_style(style);
         let window_id = self.cursor_window_id.get();
-        self.background_executor
+        let request = (window_id, style);
+        if self.cursor_style.get() == Some(request) {
+            return;
+        }
+        self.cursor_style.set(Some(request));
+        let cursor_style = self.cursor_style.clone();
+        self.foreground_executor
             .spawn(async move {
                 let result = async {
                     WindowClient::new(&app)?
-                        .set_cursor_icon(window_id, style)
+                        .set_cursor_icon(window_id, ohos_cursor_style(style))
                         .await
                 }
                 .await;
                 if let Err(error) = result {
                     warn!("Failed to set OHOS cursor style: {error}");
+                    if cursor_style.get() == Some(request) {
+                        cursor_style.set(None);
+                    }
                 }
             })
             .detach();
@@ -2146,24 +2241,23 @@ impl Platform for OhosPlatform {
         let Some(app) = self.app.borrow().clone() else {
             return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
         };
-        let guards = self.idle_sleep_guards.clone();
-        let background = self.background_executor.clone();
-        self.background_executor.spawn(async move {
-            let client = WindowClient::new(&app)?;
-            client.set_keep_screen_on(0, true).await?;
-            guards.fetch_add(1, Ordering::AcqRel);
-            Ok(ActivityGuard::new(move || {
-                if guards.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    background
-                        .spawn(async move {
-                            if let Err(error) = client.set_keep_screen_on(0, false).await {
-                                warn!("Failed to restore OHOS idle sleep: {error}");
-                            }
-                        })
-                        .detach();
-                }
-            }))
-        })
+        let client = match WindowClient::new(&app) {
+            Ok(client) => client,
+            Err(error) => return Task::ready(Err(error.into())),
+        };
+        let (sender, receiver) = oneshot::channel();
+        {
+            let mut state = self.idle_sleep.lock().unwrap();
+            state.guards += 1;
+            state.waiters.push(sender);
+        }
+        reconcile_idle_sleep(
+            self.idle_sleep.clone(),
+            client,
+            self.background_executor.clone(),
+        );
+        self.background_executor
+            .spawn(async move { receiver.await? })
     }
 
     fn read_from_primary(&self) -> Option<ClipboardItem> {

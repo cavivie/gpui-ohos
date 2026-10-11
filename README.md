@@ -76,6 +76,8 @@ third-party OpenHarmony app:
 - Native prompts preserve button order and cancel indices. Window snapshots retain
   position, size, maximized/fullscreen state, and the restore frame. Window stacking
   comes from the SDK's actual current-app window order.
+- Retaining file picker access across app restarts requires
+  `ohos.permission.FILE_ACCESS_PERSIST` and is best effort on supported devices.
 - Clipboard reads preserve all supported native records, string metadata, image
   bytes, and file URIs. Native update notifications invalidate cached data; queued
   writes complete before async reads. Reading requires the manifest permission,
