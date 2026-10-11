@@ -80,6 +80,3 @@ mode. CPU samples lasted 9 seconds at procfs 100-tick/second resolution: these
 measurements do not establish zero power or a real-device thermal result. Host
 timings must not be interpreted as an OHOS speedup. Temporary counters and fault
 injection are absent from production source.
-
-[Structured evidence](../tests/touch/evidence/performance.json) records the
-measurements and production source hashes.
