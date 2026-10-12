@@ -36,6 +36,19 @@ unchanged at `f45c7c22d0`.
   still reach every live window. `SmallVec` has four inline entries and grows
   on the heap; four is not a window limit. Resize callbacks are deduplicated
   only when full bounds, effective content size and scale are all unchanged.
+- `frame_clock.rs` maps NativeVSync `CLOCK_MONOTONIC` timestamps to the
+  `Instant` clock used for input dispatch. The main queue consumes only the
+  latest pending tick; late or duplicate callbacks cannot complete another
+  request. Momentum advances on the delivered frame time, so queue delay is not
+  added to animation time.
+- The renderer reports presented, retry and unavailable surface outcomes.
+  Transient acquisition failures keep presentation demand and request the next
+  VSync, which presents the latest scene without another layout. Unavailable
+  surfaces wait for input or lifecycle events instead of spinning.
+- Quads use general, solid-fill or borderless-rectangle pipelines selected per
+  contiguous run, preserving scene order, clipping, blending and antialiasing.
+  Resolved multisample path attachments use `StoreOp::Discard`; sample count
+  and resolution are unchanged.
 - `WgpuContext` owns common shader/layout handles and caches pipelines by surface
   format, alpha mode, path sample count and dual-source blending. Window buffers,
   uniforms and surface textures retain their existing ownership; atlas reuse
