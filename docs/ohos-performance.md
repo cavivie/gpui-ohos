@@ -57,10 +57,11 @@ cargo clippy --manifest-path tests/touch/Cargo.toml --locked -- -D warnings
 cargo fmt --manifest-path tests/touch/Cargo.toml --check
 ```
 
-47 regressions cover gestures, frame generations, viewport deduplication, wake
-coalescing, timers, blocking background tasks, worker limits, monitor backoff,
-priority fairness, shutdown, cache variants and pixel conversion. ARM64
-Release integration built successfully.
+54 regressions cover gestures, frame generations, frame clock calibration,
+viewport deduplication, wake coalescing, timers, blocking background tasks,
+worker limits, monitor backoff, priority fairness, shutdown, cache variants,
+quad pipeline eligibility and pixel conversion. ARM64 Release integration built
+successfully.
 
 The same standalone GPUI example was measured before and after optimization:
 

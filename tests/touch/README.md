@@ -9,6 +9,8 @@ reader is used. Host results do not replace simulator integration checks.
 The regressions include CPU-only long polls (no worker growth), synchronous
 parent/child waits, external work while workers block, viewport publication
 across changed geometry and scale, and frame/gesture lifetime boundaries.
+They also cover native frame clock calibration, coalesced VSync momentum,
+late and duplicate frame callbacks, and specialized quad pipeline eligibility.
 
 ```sh
 cargo test --manifest-path tests/touch/Cargo.toml --locked
