@@ -31,6 +31,9 @@ mod frame_request;
 #[path = "../../src/ohos/worker_state.rs"]
 mod native_worker_state;
 #[allow(dead_code)]
+#[path = "../../src/ohos/presentation.rs"]
+mod presentation;
+#[allow(dead_code)]
 #[path = "../../src/ohos/quad_pipeline.rs"]
 mod quad_pipeline;
 #[allow(dead_code)]

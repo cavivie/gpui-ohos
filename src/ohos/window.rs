@@ -33,10 +33,11 @@ use super::display::OhosDisplay;
 use super::frame_clock::FrameClock;
 use super::keyboard::OhosKeyState;
 use super::platform::appearance_for_color_mode;
+use super::presentation::{Presentation, PresentationDemand};
 use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
-use super::wgpu_renderer::{Presentation, WgpuRenderer, WgpuSurfaceConfig};
+use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
     ForegroundExecutor, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke, Modifiers, MouseButton,
@@ -109,7 +110,7 @@ pub(crate) struct OhosWindow {
     clipboard: super::clipboard::OhosClipboard,
     callbacks: Rc<RefCell<WindowCallbacks>>,
     renderer: RefCell<Option<WgpuRenderer>>,
-    presentation: Cell<Presentation>,
+    presentation: PresentationDemand,
     surface_available: Cell<bool>,
     force_render: Cell<bool>,
     gpu_context: Arc<WgpuContext>,
@@ -458,7 +459,7 @@ impl OhosWindow {
                 hit_test_window_control: None,
             })),
             renderer: RefCell::new(None),
-            presentation: Cell::new(Presentation::Unavailable),
+            presentation: PresentationDemand::default(),
             surface_available: Cell::new(false),
             force_render: Cell::new(false),
             gpu_context,
@@ -560,10 +561,9 @@ impl OhosWindow {
         let mut callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(ref mut callback) = callback {
             callback(RequestFrameOptions {
-                // GPUI clears its needs_present flag after PlatformWindow::draw,
-                // including failed acquisitions. Keep that demand here and let
-                // GPUI present the latest scene without forcing another layout.
-                require_presentation: self.presentation.get() != Presentation::Presented,
+                // GPUI clears needs_present after every draw. Retain retries and
+                // lifecycle demand to present again without another layout.
+                require_presentation: self.presentation.needs_presentation(),
                 force_render: self.force_render.replace(false),
             });
         }
@@ -1157,7 +1157,7 @@ impl OhosWindow {
     fn update_visibility(&self, next: WindowVisibility) {
         if next != WindowVisibility::Visible {
             self.cancel_touch_input();
-            self.presentation.set(Presentation::Unavailable);
+            self.presentation.request();
         }
         if let Some(scheduler) = &self.frame_scheduler {
             scheduler.set_active(next == WindowVisibility::Visible && self.surface_available.get());
@@ -1325,7 +1325,7 @@ impl OhosWindow {
                 .as_ref()
                 .is_none_or(|app| app.native_window_for(self.window_id).is_none())
         {
-            self.presentation.set(Presentation::Unavailable);
+            self.presentation.request();
             return;
         }
         let Some(client) = self.window_client() else {
@@ -1770,7 +1770,7 @@ impl OhosWindow {
             }
             Event::SurfaceDestroy => {
                 self.cancel_touch_input();
-                self.presentation.set(Presentation::Unavailable);
+                self.presentation.request();
                 self.surface_available.set(false);
                 if let Some(scheduler) = &self.frame_scheduler {
                     scheduler.set_active(false);
@@ -3478,21 +3478,20 @@ impl PlatformWindow for OhosWindow {
             && let Err(e) = self.initialize_renderer()
         {
             warn!("OhosWindow: Failed to initialize renderer in draw(): {}", e);
-            self.presentation.set(Presentation::Unavailable);
+            self.presentation.record(Presentation::Unavailable);
             return;
         }
 
         // Use WGPU renderer to render the scene.
         if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
             let presentation = renderer.draw(scene);
-            self.presentation.set(presentation);
-            if presentation == Presentation::Retry
+            if self.presentation.record(presentation)
                 && let Some(scheduler) = &self.frame_scheduler
             {
                 scheduler.request_frame();
             }
         } else {
-            self.presentation.set(Presentation::Unavailable);
+            self.presentation.record(Presentation::Unavailable);
             warn!("OhosWindow: draw called but renderer is not available");
         }
     }

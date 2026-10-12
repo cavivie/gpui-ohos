@@ -1,4 +1,4 @@
-use super::{wgpu_atlas::WgpuAtlas, wgpu_context::WgpuContext};
+use super::{presentation::Presentation, wgpu_atlas::WgpuAtlas, wgpu_context::WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
     AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
@@ -104,16 +104,6 @@ struct SceneInstanceBindings {
     monochrome_sprites: InstanceBinding,
     subpixel_sprites: InstanceBinding,
     polychrome_sprites: InstanceBinding,
-}
-
-/// Result of a platform presentation attempt. A transient acquisition failure
-/// retains demand until the next VSync; an unavailable surface waits for input
-/// or lifecycle events instead of spinning on a hidden or invalid surface.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Presentation {
-    Presented,
-    Retry,
-    Unavailable,
 }
 
 pub struct WgpuRenderer {

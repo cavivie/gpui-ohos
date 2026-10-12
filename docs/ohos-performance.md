@@ -43,8 +43,10 @@ unchanged at `f45c7c22d0`.
   added to animation time.
 - The renderer reports presented, retry and unavailable surface outcomes.
   Transient acquisition failures keep presentation demand and request the next
-  VSync, which presents the latest scene without another layout. Unavailable
-  surfaces wait for input or lifecycle events instead of spinning.
+  VSync, which presents the latest scene without another layout. Presented and
+  unavailable outcomes clear demand; unavailable surfaces wait for input or
+  lifecycle events instead of spinning. Initial and lifecycle demand presents
+  the latest scene even when GPUI is not dirty.
 - Quads use general, solid-fill or borderless-rectangle pipelines selected per
   contiguous run, preserving scene order, clipping, blending and antialiasing.
   Resolved multisample path attachments use `StoreOp::Discard`; sample count
@@ -66,15 +68,16 @@ were removed without changing the native frame callback body or device classes.
 
 ```sh
 cargo test --manifest-path tests/touch/Cargo.toml --locked
-cargo clippy --manifest-path tests/touch/Cargo.toml --locked -- -D warnings
+cargo clippy --manifest-path tests/touch/Cargo.toml --locked --all-targets --no-deps -- -D warnings
 cargo fmt --manifest-path tests/touch/Cargo.toml --check
 ```
 
-54 regressions cover gestures, frame generations, frame clock calibration,
-viewport deduplication, wake coalescing, timers, blocking background tasks,
-worker limits, monitor backoff, priority fairness, shutdown, cache variants,
-quad pipeline eligibility and pixel conversion. ARM64 Release integration built
-successfully.
+61 regressions cover gestures, frame generations, frame clock calibration,
+presentation retry and lifecycle demand, unavailable surfaces without idle
+retries, viewport deduplication, wake coalescing, timers, blocking background
+tasks, worker limits, monitor backoff, priority fairness, shutdown, cache
+variants, quad pipeline eligibility and pixel conversion. ARM64 Release
+integration built successfully.
 
 The same standalone GPUI example was measured before and after optimization:
 

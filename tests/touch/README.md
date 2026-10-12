@@ -1,16 +1,19 @@
 # OHOS touch regressions
 
 This harness compiles production touch, frame, dispatcher, priority queue,
-worker, viewport, cache, and pixel-conversion modules against the unmodified,
-pinned GPUI dependency. Native UI wake is a counter shim. On macOS, a test
-adapter reads Mach thread wait state; on OHOS/Linux the production worker-state
-reader is used. Host results do not replace simulator integration checks.
+worker, presentation, viewport, cache, and pixel-conversion modules against the
+unmodified, pinned GPUI dependency. Native UI wake is a counter shim. On macOS,
+a test adapter reads Mach thread wait state; on OHOS/Linux the production
+worker-state reader is used. Host results do not replace simulator integration
+checks.
 
 The regressions include CPU-only long polls (no worker growth), synchronous
 parent/child waits, external work while workers block, viewport publication
 across changed geometry and scale, and frame/gesture lifetime boundaries.
 They also cover native frame clock calibration, coalesced VSync momentum,
-late and duplicate frame callbacks, and specialized quad pipeline eligibility.
+late and duplicate frame callbacks, presentation retry and lifecycle demand,
+unavailable surfaces without idle retries, and specialized quad pipeline
+eligibility.
 
 ```sh
 cargo test --manifest-path tests/touch/Cargo.toml --locked
