@@ -5,6 +5,9 @@ streams, system velocity, animation frame rate, presentation mode, antialiasing,
 window count, pixel formats and the existing capture size guard. GPUI core is
 unchanged at `f45c7c22d0`.
 
+The rendering-cost follow-up and cross-platform comparison are recorded in
+[the October 13 measurements](render-performance-2026-10-13.md).
+
 ## Runtime ownership
 
 - `OhosDispatcher` reuses 2–8 base workers, with a hard limit of 64 live workers.
