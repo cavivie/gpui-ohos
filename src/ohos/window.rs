@@ -1646,6 +1646,10 @@ impl OhosWindow {
 
         *self.fallback_atlas.borrow_mut() = Some(renderer.sprite_atlas().clone());
         *renderer_guard = Some(renderer);
+        // Zed can open its first window after SurfaceCreate was already delivered.
+        // Bootstrap frame delivery from the native surface initialized above.
+        self.surface_available.set(true);
+        self.sync_frame_delivery();
         self.force_render.set(true);
         self.schedule_frame();
         debug!("OhosWindow: Renderer initialized successfully");
