@@ -10,6 +10,7 @@ mod frame_demand;
 mod frame_metrics;
 mod frame_request;
 mod keyboard;
+mod path_targets;
 mod platform;
 mod presentation;
 mod quad_pipeline;

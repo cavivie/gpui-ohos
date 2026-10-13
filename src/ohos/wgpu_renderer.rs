@@ -1,4 +1,7 @@
-use super::{presentation::Presentation, wgpu_atlas::WgpuAtlas, wgpu_context::WgpuContext};
+use super::{
+    path_targets::PathTargets, presentation::Presentation, wgpu_atlas::WgpuAtlas,
+    wgpu_context::WgpuContext,
+};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
     AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
@@ -120,14 +123,10 @@ pub struct WgpuRenderer {
     gamma_offset: u64,
     globals_bind_group: wgpu::BindGroup,
     path_globals_bind_group: wgpu::BindGroup,
-    path_texture_bind_group: wgpu::BindGroup,
     instance_buffer: wgpu::Buffer,
     instance_buffer_capacity: u64,
     instance_buffer_alignment: u64,
-    path_intermediate_texture: wgpu::Texture,
-    path_intermediate_view: wgpu::TextureView,
-    path_msaa_texture: Option<wgpu::Texture>,
-    path_msaa_view: Option<wgpu::TextureView>,
+    path_targets: Option<PathTargets>,
     rendering_params: RenderingParameters,
     adapter_info: wgpu::AdapterInfo,
     path_vertices: RefCell<Vec<PathRasterizationVertex>>,
@@ -311,23 +310,6 @@ impl WgpuRenderer {
             mapped_at_creation: false,
         });
 
-        let (path_intermediate_texture, path_intermediate_view) = Self::create_path_intermediate(
-            &device,
-            surface_format,
-            config.size.width.0 as u32,
-            config.size.height.0 as u32,
-        );
-
-        let (path_msaa_texture, path_msaa_view) = Self::create_msaa_if_needed(
-            &device,
-            surface_format,
-            config.size.width.0 as u32,
-            config.size.height.0 as u32,
-            rendering_params.path_sample_count,
-        )
-        .map(|(t, v)| (Some(t), Some(v)))
-        .unwrap_or((None, None));
-
         let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals_bind_group"),
             layout: &bind_group_layouts.globals,
@@ -374,13 +356,6 @@ impl WgpuRenderer {
             ],
         });
 
-        let path_texture_bind_group = Self::create_texture_bind_group(
-            &device,
-            &bind_group_layouts.textures,
-            &atlas_sampler,
-            &path_intermediate_view,
-        );
-
         let adapter_info = context.adapter.get_info();
 
         let renderer = Self {
@@ -397,14 +372,10 @@ impl WgpuRenderer {
             gamma_offset,
             globals_bind_group,
             path_globals_bind_group,
-            path_texture_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_instance_buffer_capacity,
             instance_buffer_alignment,
-            path_intermediate_texture,
-            path_intermediate_view,
-            path_msaa_texture,
-            path_msaa_view,
+            path_targets: None,
             rendering_params,
             adapter_info,
             path_vertices: RefCell::new(Vec::new()),
@@ -412,28 +383,6 @@ impl WgpuRenderer {
         };
         renderer.write_global_params(true);
         Ok(renderer)
-    }
-
-    fn create_texture_bind_group(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        texture_view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("texture_bind_group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
     }
 
     fn create_bind_group_layouts(device: &wgpu::Device) -> WgpuBindGroupLayouts {
@@ -1170,58 +1119,6 @@ impl WgpuRenderer {
         }
     }
 
-    fn create_path_intermediate(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("path_intermediate"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
-    }
-
-    fn create_msaa_if_needed(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-        sample_count: u32,
-    ) -> Option<(wgpu::Texture, wgpu::TextureView)> {
-        if sample_count <= 1 {
-            return None;
-        }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("path_msaa"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Some((texture, view))
-    }
-
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
         let width = size.width.0 as u32;
         let height = size.height.0 as u32;
@@ -1231,33 +1128,7 @@ impl WgpuRenderer {
             self.surface_config.height = height.max(1);
             self.surface.configure(&self.device, &self.surface_config);
 
-            let (path_intermediate_texture, path_intermediate_view) =
-                Self::create_path_intermediate(
-                    &self.device,
-                    self.surface_config.format,
-                    self.surface_config.width,
-                    self.surface_config.height,
-                );
-            self.path_intermediate_texture = path_intermediate_texture;
-            self.path_intermediate_view = path_intermediate_view;
-            self.path_texture_bind_group = Self::create_texture_bind_group(
-                &self.device,
-                &self.bind_group_layouts.textures,
-                &self.atlas_sampler,
-                &self.path_intermediate_view,
-            );
-
-            let (path_msaa_texture, path_msaa_view) = Self::create_msaa_if_needed(
-                &self.device,
-                self.surface_config.format,
-                self.surface_config.width,
-                self.surface_config.height,
-                self.rendering_params.path_sample_count,
-            )
-            .map(|(t, v)| (Some(t), Some(v)))
-            .unwrap_or((None, None));
-            self.path_msaa_texture = path_msaa_texture;
-            self.path_msaa_view = path_msaa_view;
+            self.path_targets = None;
             self.write_global_params(false);
         }
     }
@@ -1354,6 +1225,18 @@ impl WgpuRenderer {
         let frame_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Retain targets across path frames, but allocate nothing for windows that
+        // never draw paths. Resize invalidates them before the next path frame.
+        if !scene.paths.is_empty() && self.path_targets.is_none() {
+            self.path_targets = Some(PathTargets::new(
+                &self.device,
+                &self.surface_config,
+                self.rendering_params.path_sample_count,
+                &self.bind_group_layouts.textures,
+                &self.atlas_sampler,
+            ));
+        }
 
         loop {
             let mut instance_offset: u64 = 0;
@@ -1699,7 +1582,11 @@ impl WgpuRenderer {
                 offset,
                 stride: std::mem::size_of::<PathSprite>() as u64,
             },
-            &self.path_texture_bind_group,
+            &self
+                .path_targets
+                .as_ref()
+                .expect("path targets prepared before drawing")
+                .bind_group,
             &self.pipelines.paths,
             pass,
         )
@@ -1734,11 +1621,11 @@ impl WgpuRenderer {
             return false;
         };
 
-        let (target_view, resolve_target) = if let Some(ref msaa_view) = self.path_msaa_view {
-            (msaa_view, Some(&self.path_intermediate_view))
-        } else {
-            (&self.path_intermediate_view, None)
-        };
+        let targets = self
+            .path_targets
+            .as_ref()
+            .expect("path targets prepared before drawing");
+        let (target_view, resolve_target) = targets.attachments();
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
