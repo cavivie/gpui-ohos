@@ -368,7 +368,7 @@ impl TouchScroll {
     }
 
     /// Pan does not emit post-release deltas. GPUI painting still needs one
-    /// window-owned inertia curve, advanced once per native VSync.
+    /// window-owned inertia curve, advanced once per delivered frame.
     pub(crate) fn tick(&mut self, now: Instant) -> Option<PlatformInput> {
         let momentum = self.momentum.as_mut()?;
         let elapsed = now
@@ -968,31 +968,23 @@ mod tests {
     }
 
     #[test]
-    fn queued_vsync_ticks_preserve_release_origin_and_skip_intermediate_frames() {
-        use super::super::frame_request::FrameRequest;
-
+    fn inertia_uses_current_frame_time_and_never_advances_before_release() {
         let release = Instant::now();
         let mut scroll = TouchScroll::default();
         let mut reference = TouchScroll::default();
         fling(&mut scroll, release, false);
         fling(&mut reference, release, false);
-        // A frame queued before Pan End must not advance the new fling.
         let old_tick = scroll.tick(release - Duration::from_millis(8)).unwrap();
         assert_eq!(deltas(&[old_tick])[0].y, px(0.));
 
-        let frames = FrameRequest::default();
-        frames.set_active(true);
-        for ms in [8, 16, 24] {
-            let ticket = frames.request().unwrap();
-            frames.complete(ticket, release + Duration::from_millis(ms));
-        }
-        // The main thread may run much later. Its wall time is deliberately
-        // absent: only the latest VSync tick determines the animation step.
-        let latest = frames.take_pending().unwrap();
+        let latest = release + Duration::from_millis(24);
         let actual = scroll.tick(latest).unwrap();
-        let expected = reference.tick(release + Duration::from_millis(24)).unwrap();
-        assert_eq!(deltas(&[actual]), deltas(&[expected]));
-        assert!(frames.take_pending().is_none());
+        let mut expected = px(0.);
+        for ms in [8, 16, 24] {
+            let event = reference.tick(release + Duration::from_millis(ms)).unwrap();
+            expected += deltas(&[event])[0].y;
+        }
+        assert!((deltas(&[actual])[0].y - expected).abs() < px(0.001));
     }
 
     #[test]

@@ -1594,7 +1594,6 @@ dependencies = [
  "ohos-asset-binding",
  "ohos-fileshare-binding",
  "ohos-fileuri-binding",
- "ohos-vsync-binding",
  "openharmony-ability",
  "openharmony-ability-plugin-app-control",
  "openharmony-ability-plugin-clipboard",
@@ -3007,12 +3006,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ohos-native-vsync-sys"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20c4b106ed051ea58130dfe88dd51a22820f24b0e514455bb515ab882b7566ec"
-
-[[package]]
 name = "ohos-native-window-manager-sys"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3083,15 +3076,6 @@ version = "0.0.4"
 source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836#c05f75ebc489ad2a8c7f7b314aac38a27fb24836"
 dependencies = [
  "ohos-image-native-sys 0.0.4 (git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836)",
-]
-
-[[package]]
-name = "ohos-vsync-binding"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8effeb38049cc29b784da576338f10aa5f06bb5cdab4d3de76dcda1dec7f34"
-dependencies = [
- "ohos-native-vsync-sys",
 ]
 
 [[package]]

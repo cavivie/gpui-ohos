@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 /// Result of a platform presentation attempt. A transient acquisition failure
-/// retains demand until the next VSync; an unavailable surface waits for input
+/// retains demand until the next frame; an unavailable surface waits for input
 /// or lifecycle events instead of spinning on a hidden or invalid surface.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Presentation {
@@ -31,7 +31,7 @@ impl PresentationDemand {
         self.pending.get()
     }
 
-    /// Returns whether the next VSync should be requested.
+    /// Returns whether the next frame should be requested.
     pub(crate) fn record(&self, presentation: Presentation) -> bool {
         let retry = presentation == Presentation::Retry;
         self.pending.set(retry);
@@ -57,7 +57,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_keeps_demand_and_requests_next_vsync() {
+    fn retry_keeps_demand_and_requests_next_frame() {
         let demand = PresentationDemand::default();
         for _ in 0..3 {
             assert!(demand.record(Presentation::Retry));

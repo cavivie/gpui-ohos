@@ -108,7 +108,6 @@ ohos-asset-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.gi
 ohos-accessibility-binding = "0.1"
 ohos-fileuri-binding = "0.1"
 ohos-fileshare-binding = "0.1"
-ohos-vsync-binding = "0.3"
 
 [patch.crates-io]
 ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }

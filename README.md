@@ -27,8 +27,10 @@ branch. Rust crates and ArkTS packages share the example's initialized
 XComponent's native ArkUI Pan supplies scroll recognition, displacement and
 release velocity. Raw contacts support control capture, taps, long presses and
 stopping inertia. The first accepted Pan packet moves the view immediately.
-Rendering and post-release momentum advance through a single demand-driven
-native VSync source; visibility and surface changes are applied before drawing.
+Rendering and post-release momentum advance through XComponent frame callbacks,
+registered on demand and removed after 12 idle callbacks. A failed registration
+schedules one delayed draw; visibility and surface changes are applied before
+drawing.
 
 See [touch input and frame scheduling](./docs/touch-input.md) for ownership and
 lifecycle details, and [OHOS adaptation performance](./docs/ohos-performance.md)

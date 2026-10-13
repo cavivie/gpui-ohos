@@ -24,26 +24,38 @@ unchanged at `f45c7c22d0`.
   on the UI thread; each UI turn processes up to 64 tasks or 2 ms and posts a
   continuation for remaining work. Scheduling foreground work wakes the UI,
   including when the screen has no animation.
-- Windows share `MainWake` to coalesce native wake events. Each window retains
-  an independent atomic frame state and generation ticket. A callback from an
-  earlier surface/visibility generation cannot clear a new request.
-- Healthy native VSync uses Ability's `FrameInputDelivery::OnDemand` to remove
-  the unused continuous XComponent display callback. All input callbacks remain
-  registered. Missing/failed native VSync restores `Continuous`; this was tested
-  with forced native VSync creation failure on phone and 2in1. Resume requests
-  a fresh frame and retries native VSync after a failed render session.
+- `MainWake` coalesces foreground task wake events, including `UserEvent` while
+  no frame callback is registered. Each window owns an independent `FrameDemand`
+  state machine; main and child windows do not share frame demand.
+- XComponent is the display frame source. Demand switches
+  `set_frame_input_delivery_for` to `FrameInputDelivery::Continuous`, registering
+  the window's callback. After 12 consecutive callbacks without demand, it
+  switches to `OnDemand` to unregister. Input callbacks stay registered. Startup,
+  surface creation/recreation and becoming visible request a first frame.
+- Registration and unregistration run only on the UI thread. `FrameCallbackScope`
+  covers native redraw delivery across all windows; changes requested inside
+  that scope are coalesced into a later foreground task. Native redraw events
+  never drain the foreground queue. Each callback draws with `Instant::now()`.
+- Failed registration with active demand schedules one fallback draw at least
+  16 ms later through the existing dispatcher timer and foreground executor.
+  Each window has at most one pending fallback. The draw consumes its demand;
+  only new demand retries registration and can schedule another delayed draw.
+  Successful registration cancels the fallback. Hiding, closing or destroying
+  the surface cancels it as well. Timer tasks and draw targets use weak
+  references to avoid retaining a window. Failed unregistration leaves
+  continuous callbacks enabled without repeated attempts until surface
+  destruction. Each operation warns only once per window.
+- After successful idle unregistration, frame callbacks and frame timers stop;
+  foreground tasks and input can still wake the application. Simulator runs
+  observed idle callbacks and CPU near zero, with demand-to-draw latency p50
+  around 8 ms and no observed regression in scrolling cadence.
 - The window index routes borrowed input directly to its owner. Global events
   still reach every live window. `SmallVec` has four inline entries and grows
   on the heap; four is not a window limit. Resize callbacks are deduplicated
   only when full bounds, effective content size and scale are all unchanged.
-- `frame_clock.rs` maps NativeVSync `CLOCK_MONOTONIC` timestamps to the
-  `Instant` clock used for input dispatch. The main queue consumes only the
-  latest pending tick; late or duplicate callbacks cannot complete another
-  request. Momentum advances on the delivered frame time, so queue delay is not
-  added to animation time.
 - The renderer reports presented, retry and unavailable surface outcomes.
   Transient acquisition failures keep presentation demand and request the next
-  VSync, which presents the latest scene without another layout. Presented and
+  frame, which presents the latest scene without another layout. Presented and
   unavailable outcomes clear demand; unavailable surfaces wait for input or
   lifecycle events instead of spinning. Initial and lifecycle demand presents
   the latest scene even when GPUI is not dirty.
@@ -67,33 +79,38 @@ were removed without changing the native frame callback body or device classes.
 ## Verification
 
 ```sh
+export CC_aarch64_unknown_linux_ohos=aarch64-unknown-linux-ohos-clang
+export CXX_aarch64_unknown_linux_ohos=aarch64-unknown-linux-ohos-clang++
+export AR_aarch64_unknown_linux_ohos=llvm-ar
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER=aarch64-unknown-linux-ohos-clang
+cargo clippy --locked --target aarch64-unknown-linux-ohos --all-features --all-targets -- -D warnings
+cargo clippy --locked --target aarch64-unknown-linux-ohos --all-targets -- -D warnings
+cargo fmt --check
 cargo test --manifest-path tests/touch/Cargo.toml --locked
 cargo clippy --manifest-path tests/touch/Cargo.toml --locked --all-targets --no-deps -- -D warnings
 cargo fmt --manifest-path tests/touch/Cargo.toml --check
+(cd example && cargo check --locked --target aarch64-unknown-linux-ohos)
 ```
 
-61 regressions cover gestures, frame generations, frame clock calibration,
-presentation retry and lifecycle demand, unavailable surfaces without idle
-retries, viewport deduplication, wake coalescing, timers, blocking background
+74 host regressions cover gestures, callback demand and registration failure
+recovery, presentation retry and lifecycle demand, unavailable surfaces without
+idle retries, viewport deduplication, wake coalescing, timers, blocking background
 tasks, worker limits, monitor backoff, priority fairness, shutdown, cache
-variants, quad pipeline eligibility and pixel conversion. ARM64 Release
-integration built successfully.
+variants, quad pipeline eligibility and pixel conversion. `FrameDemand` has 20
+regressions, including fallback coalescing, demand during fallback, successful
+registration, unexpected callbacks, hiding and surface destruction.
 
-The same standalone GPUI example was measured before and after optimization:
+Host tests and target compilation do not establish native callback safety or
+real-device power use. Simulator checks should cover first frames, main/child
+window independence, hide/restore, surface recreation, scrolling, registration
+failure recovery and continuous-callback degradation after failed unregistration.
+
+The following measurements cover other retained runtime/rendering optimizations:
 
 | Case | Before | Optimized |
 | --- | ---: | ---: |
-| Phone idle native redraw events/s | 64.0 | 0 |
-| 2in1 idle native redraw events/s | 63.291 | 0 |
-| Phone idle CPU, one core | 1.098% | 0 observed ticks |
-| 2in1 idle CPU, one core | 1.649% | 0 observed ticks |
 | Compatible pipeline sets for main + 3 child windows | 4 | 1 |
 | Worker thread IDs for 2,064 cooperative continuations (host) | 2,064 | 8 |
 | Median dispatcher duration for that workload (host) | 31.893 ms | 2.616 ms |
 
-Phone and 2in1 both passed foreground/background cycles. 2in1 passed concurrent
-child-window creation, independent input, close and reopen, including fallback
-mode. CPU samples lasted 9 seconds at procfs 100-tick/second resolution: these
-measurements do not establish zero power or a real-device thermal result. Host
-timings must not be interpreted as an OHOS speedup. Temporary counters and fault
-injection are absent from production source.
+Host timings must not be interpreted as an OHOS speedup.

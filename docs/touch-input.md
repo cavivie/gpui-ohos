@@ -1,10 +1,11 @@
 # OHOS touch input and frame scheduling
 
-`src/ohos/window.rs` uses the demand-driven GPUI VSync scheduler as the
-single source of rendering ticks. XComponent's continuous `WindowRedraw`
-callback remains a fallback when native VSync creation or requests fail.
-This avoids drawing twice per display refresh and advancing touch momentum
-from two independent frame sources.
+`src/ohos/window.rs` advances rendering and momentum through XComponent frame
+callbacks. Each window registers on demand and unregisters after 12 idle
+callbacks. Registration changes run on the UI thread outside native frame
+callbacks. A failed registration schedules one fallback draw after at least
+16 ms; new demand retries registration. Failed unregistration leaves continuous
+callbacks enabled until surface destruction.
 
 Touch scrolling is adapted by `src/ohos/touch_scroll.rs`, using only GPUI's
 public `PlatformInput` interface. GPUI itself is the unmodified git dependency
@@ -34,18 +35,21 @@ input modality without emitting another gesture.
 
 Native Pan does not emit post-release displacement. Each window therefore owns
 at most one momentum curve, seeded from native Pan End velocity and advanced
-once per native VSync. Its origin is release dispatch time, so queued delivery
-cannot skip the first inertia frame. Swipe does not launch another curve.
-No GPUI momentum frame callbacks are scheduled. A cancellable, one-shot timer
-is used only for pending long presses. Host regressions are run with:
+once per delivered frame using `Instant::now()`. Its origin is release dispatch
+time; a delayed frame integrates elapsed motion without replaying intermediate
+frames, and a frame time before release cannot advance the curve. Swipe does not
+launch another curve. No GPUI momentum frame callbacks are scheduled. Pending
+long presses and frame-registration failure recovery use cancellable, one-shot
+timers. Host regressions are run with:
 
 ```sh
 cargo test --manifest-path tests/touch/Cargo.toml --locked
 ```
 
-Window visibility and surface lifecycle are processed before pending frames.
-Hidden or destroyed surfaces do not present frames; backgrounding clears
-pending frame demand, active contacts, long-press timers and momentum. A
-visible surface requests a fresh VSync on resume.
+Hiding or destroying a surface unregisters its frame callback and cancels any
+pending fallback draw. Hidden or destroyed surfaces do not present frames;
+backgrounding clears pending frame demand, active contacts, long-press timers
+and momentum. A
+visible surface requests a fresh frame and registers its callback on resume.
 This prevents a queued animation frame from presenting to a surface the
 system has just hidden or destroyed.

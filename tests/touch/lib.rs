@@ -21,11 +21,8 @@ mod capture_pixels;
 #[path = "../../src/ohos/dispatcher.rs"]
 mod dispatcher;
 #[allow(dead_code)]
-#[path = "../../src/ohos/frame_clock.rs"]
-mod frame_clock;
-#[allow(dead_code)]
-#[path = "../../src/ohos/frame_request.rs"]
-mod frame_request;
+#[path = "../../src/ohos/frame_demand.rs"]
+mod frame_demand;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 #[path = "../../src/ohos/worker_state.rs"]

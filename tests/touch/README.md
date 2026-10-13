@@ -10,8 +10,9 @@ checks.
 The regressions include CPU-only long polls (no worker growth), synchronous
 parent/child waits, external work while workers block, viewport publication
 across changed geometry and scale, and frame/gesture lifetime boundaries.
-They also cover native frame clock calibration, coalesced VSync momentum,
-late and duplicate frame callbacks, presentation retry and lifecycle demand,
+They also cover demand-driven callback registration, the 12-callback idle threshold,
+registration failure recovery without idle retries, per-window independence,
+momentum across skipped frames, presentation retry and lifecycle demand,
 unavailable surfaces without idle retries, and specialized quad pipeline
 eligibility.
 

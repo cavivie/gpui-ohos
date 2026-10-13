@@ -43,14 +43,14 @@ struct TimerState {
     closed: bool,
 }
 #[derive(Default)]
-pub(crate) struct MainWake {
+struct MainWake {
     requested: AtomicBool,
     waker: Mutex<Option<OpenHarmonyWaker>>,
     stopped: AtomicBool,
     enqueue_gate: Mutex<()>,
 }
 impl MainWake {
-    pub(crate) fn notify(&self) {
+    fn notify(&self) {
         if self.stopped.load(AtomicOrdering::Acquire)
             || self.requested.swap(true, AtomicOrdering::AcqRel)
         {
@@ -118,9 +118,6 @@ impl OhosDispatcher {
     pub(crate) fn set_waker(&self, waker: OpenHarmonyWaker) {
         *self.wake.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(waker);
         self.wake.notify();
-    }
-    pub(crate) fn frame_waker(&self) -> Arc<MainWake> {
-        self.wake.clone()
     }
     pub(crate) fn begin_main_turn(&self) {
         self.wake.requested.store(false, AtomicOrdering::Release);
