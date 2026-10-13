@@ -22,6 +22,14 @@ branch. Rust crates and ArkTS packages share the example's initialized
 `openharmony-ability` submodule; its Git entry pins the exact commit. Run
 `git submodule update --init --recursive` before building.
 
+The pinned Ability revision uses ArkUI `0.4.1`, XComponent `0.5.1`, and
+IME `0.3.1`. GPUI explicitly enables Ability's `keyboard` and `drag` features
+to preserve hardware key delivery and native file drag/drop. Input bindings
+follow Ability's pinned sources; the crate and example need no crates.io
+patches or neighboring local binding checkout.
+XComponent's `api-18` feature keeps native mouse cancellation available to the
+input adapter; it uses the same binding revision as Ability.
+
 ## Touch input and rendering
 
 XComponent's native ArkUI Pan supplies scroll recognition, displacement and

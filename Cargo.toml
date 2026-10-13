@@ -23,7 +23,10 @@ image = { version = "0.25.1", default-features = false }
 log = "0.4"
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
-openharmony-ability = { path = "example/ohos/vendor/openharmony-ability/crates/ability" }
+# Match Ability's binding source and keep the API-18 mouse Cancel variant enabled.
+ohos-xcomponent-binding = { version = "0.5.1", git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "216d45870a0c0690b56280b39f0b82484b1c913b", features = ["api-18"] }
+# GPUI uses owned ArkUI key events and native file drag/drop on every backend.
+openharmony-ability = { path = "example/ohos/vendor/openharmony-ability/crates/ability", features = ["keyboard", "drag"] }
 openharmony-ability-plugin-menu = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-menu" }
 openharmony-ability-plugin-notification = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-notification" }
 openharmony-ability-plugin-system-state = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-system-state" }
@@ -90,6 +93,7 @@ serde.workspace = true
 openharmony-ability-plugin-process.workspace = true
 napi-ohos.workspace = true
 napi-derive-ohos.workspace = true
+ohos-xcomponent-binding.workspace = true
 url.workspace = true
 openharmony-ability-plugin-url.workspace = true
 openharmony-ability-plugin-window.workspace = true
@@ -111,11 +115,3 @@ ohos-accessibility-binding = "0.1"
 ohos-fileuri-binding = "0.1"
 ohos-fileshare-binding = "0.1"
 ohos-vsync-binding = "0.3"
-
-[patch.crates-io]
-ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
-ohos-accessibility-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
-ohos-xcomponent-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
-ohos-xcomponent-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
-ohos-arkui-input-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
-ohos-arkui-input-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
