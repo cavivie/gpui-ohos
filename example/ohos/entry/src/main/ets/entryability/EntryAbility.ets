@@ -17,10 +17,12 @@ export default class EntryAbility extends NativeAbility {
   public defaultPage: boolean = true;
   public bridgePlugins = [
     new LazyPlugin(() => new AppControlPlugin()),
-    new LazyPlugin(() => new ClipboardPlugin()),
+    new LazyPlugin(
+      () => new ClipboardPlugin({ metadataMimeType: "application/x-gpui-ohos-text-metadata-v1" }),
+    ),
     new LazyPlugin(() => new FilesPlugin()),
     new LazyPlugin(() => new MenuPlugin()),
-    new LazyPlugin(() => new NotificationPlugin()),
+    new LazyPlugin(() => new NotificationPlugin({ scheme: "gpui-notification" })),
     new LazyPlugin(() => new PermissionPlugin()),
     new LazyPlugin(() => new ProcessPlugin()),
     new LazyPlugin(() => new SystemStatePlugin()),
