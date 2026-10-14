@@ -7,4 +7,4 @@
 mod ohos;
 
 pub use gpui::*;
-pub use ohos::current_platform;
+pub use ohos::{KeyboardType, current_platform, set_keyboard_type};

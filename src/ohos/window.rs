@@ -349,6 +349,7 @@ impl OhosWindow {
 
     fn request_keyboard(&self) {
         if let Some(app) = self.app.borrow().as_ref() {
+            app.set_input_type(super::wanted_input_type());
             app.show_keyboard();
             self.keyboard_visible.set(true);
         }
