@@ -4,18 +4,6 @@ This pass compares the pinned GPUI backends and reduces OHOS renderer work. It
 does not change NativeVSync, XComponent frame demand, animation stepping, GLES
 FIFO presentation, resolution, antialiasing, or GPUI core.
 
-The follow-up [Vulkan comparison](vulkan-comparison-2026-10-13.md) measures both
-backends on this optimized code and records why GLES remains the default.
-
-[Further renderer experiments](render-followup-experiments-2026-10-13.md) test
-buffer rotation, smaller capacity, and reusable upload chunks within gpui-ohos.
-
-[Path target and storage experiments](render-path-storage-experiments-2026-10-13.md)
-verify lazy allocation savings and two Vulkan storage prototypes.
-
-[Direct-window experiment](direct-window-experiment-2026-10-13.md) validates a
-GLES default-framebuffer prototype and records where buffer acquisition moves.
-
 ## Source comparison
 
 Sources are GPUI `ohos-rs/zed@f45c7c22d0`, wgpu `8b419de0906f37af69d728f1735132e427a3436f`,
