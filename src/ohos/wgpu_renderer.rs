@@ -1515,29 +1515,68 @@ impl WgpuRenderer {
         scene: &Scene,
         instance_offset: &mut u64,
     ) -> Option<SceneInstanceBindings> {
+        // One staging allocation and one queued copy for all instance kinds.
+        let data = unsafe {
+            [
+                Self::instance_bytes(&scene.quads),
+                Self::instance_bytes(&scene.shadows),
+                Self::instance_bytes(&scene.underlines),
+                Self::instance_bytes(&scene.monochrome_sprites),
+                Self::instance_bytes(&scene.subpixel_sprites),
+                Self::instance_bytes(&scene.polychrome_sprites),
+            ]
+        };
+        let start = (*instance_offset).next_multiple_of(self.instance_buffer_alignment);
+        let mut end = start;
+        let mut offsets = [0; 6];
+        for (offset, bytes) in offsets.iter_mut().zip(data) {
+            *offset = end.next_multiple_of(self.instance_buffer_alignment);
+            end = (*offset).checked_add((bytes.len() as u64).max(16))?;
+        }
+        if end > self.instance_buffer_capacity {
+            return None;
+        }
+        // An empty scene (or a paths-only scene) needs no instance transfer.
+        if data.iter().any(|bytes| !bytes.is_empty()) {
+            let mut upload = self.queue.write_buffer_with(
+                &self.instance_buffer,
+                start,
+                NonZeroU64::new(end - start)?,
+            )?;
+            upload.slice(..).fill(0);
+            for (offset, bytes) in offsets.into_iter().zip(data) {
+                let offset = (offset - start) as usize;
+                upload
+                    .slice(offset..offset + bytes.len())
+                    .copy_from_slice(bytes);
+            }
+        }
+        *instance_offset = end;
         Some(SceneInstanceBindings {
-            quads: self.write_instance_binding(&scene.quads, instance_offset)?,
-            shadows: self.write_instance_binding(&scene.shadows, instance_offset)?,
-            underlines: self.write_instance_binding(&scene.underlines, instance_offset)?,
-            monochrome_sprites: self
-                .write_instance_binding(&scene.monochrome_sprites, instance_offset)?,
-            subpixel_sprites: self
-                .write_instance_binding(&scene.subpixel_sprites, instance_offset)?,
-            polychrome_sprites: self
-                .write_instance_binding(&scene.polychrome_sprites, instance_offset)?,
-        })
-    }
-
-    fn write_instance_binding<T>(
-        &self,
-        instances: &[T],
-        instance_offset: &mut u64,
-    ) -> Option<InstanceBinding> {
-        let data = unsafe { Self::instance_bytes(instances) };
-        let (offset, _) = self.write_to_instance_buffer(instance_offset, data)?;
-        Some(InstanceBinding {
-            offset,
-            stride: std::mem::size_of::<T>() as u64,
+            quads: InstanceBinding {
+                offset: offsets[0],
+                stride: std::mem::size_of::<Quad>() as u64,
+            },
+            shadows: InstanceBinding {
+                offset: offsets[1],
+                stride: std::mem::size_of::<Shadow>() as u64,
+            },
+            underlines: InstanceBinding {
+                offset: offsets[2],
+                stride: std::mem::size_of::<Underline>() as u64,
+            },
+            monochrome_sprites: InstanceBinding {
+                offset: offsets[3],
+                stride: std::mem::size_of::<MonochromeSprite>() as u64,
+            },
+            subpixel_sprites: InstanceBinding {
+                offset: offsets[4],
+                stride: std::mem::size_of::<gpui::SubpixelSprite>() as u64,
+            },
+            polychrome_sprites: InstanceBinding {
+                offset: offsets[5],
+                stride: std::mem::size_of::<PolychromeSprite>() as u64,
+            },
         })
     }
 

@@ -167,6 +167,19 @@ fn to_device_position(unit_vertex: vec2<f32>, bounds: Bounds) -> vec4<f32> {
     return to_device_position_impl(position);
 }
 
+// Keep original shape bounds for shading, but rasterize only inside an integral
+// content mask. Fractional masks keep their original geometry: shortening an
+// interpolated clip distance can change its sign at a pixel-center boundary.
+fn clipped_position(unit_vertex: vec2<f32>, bounds: Bounds, mask: Bounds) -> vec2<f32> {
+    let mask_end = mask.origin + mask.size;
+    if (any(mask.origin != floor(mask.origin)) || any(mask_end != floor(mask_end))) {
+        return unit_vertex * bounds.size + bounds.origin;
+    }
+    let first = max(bounds.origin, mask.origin);
+    let last = max(first, min(bounds.origin + bounds.size, mask_end));
+    return first + unit_vertex * (last - first);
+}
+
 fn to_device_position_transformed(unit_vertex: vec2<f32>, bounds: Bounds, transform: TransformationMatrix) -> vec4<f32> {
     let position = unit_vertex * vec2<f32>(bounds.size) + bounds.origin;
     //Note: Rust side stores it as row-major, so transposing here
@@ -569,8 +582,9 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, quad: QuadVertexInput) -> Quad
     colors[1].color = color1_hsla;
     colors[1].percentage = quad.background_stop1;
 
+    let position = clipped_position(unit_vertex, bounds, content_mask);
     var out = QuadVarying();
-    out.position = to_device_position(unit_vertex, bounds);
+    out.position = to_device_position_impl(position);
 
     let gradient = prepare_gradient_color(
         quad.background_tag_colorspace.x,
@@ -598,7 +612,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, quad: QuadVertexInput) -> Quad
     out.background_angle = quad.background_angle;
     out.background_stops = vec2<f32>(quad.background_stop0, quad.background_stop1);
     out.border_style = quad.order_border_style.y;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, content_mask);
+    out.clip_distances = distance_from_clip_rect_impl(position, content_mask);
     return out;
 }
 
@@ -1063,14 +1077,15 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, shadow_input: ShadowVertexIn
     color_hsla.l = shadow_input.color.z;
     color_hsla.a = shadow_input.color.w;
 
+    let position = clipped_position(unit_vertex, bounds, content_mask);
     var out = ShadowVarying();
-    out.position = to_device_position(unit_vertex, bounds);
+    out.position = to_device_position_impl(position);
     out.color = hsla_to_rgba(color_hsla);
     out.bounds_origin = bounds.origin;
     out.bounds_size = bounds.size;
     out.corner_radii = shadow_input.corner_radii;
     out.blur_radius = blur_radius;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, content_mask);
+    out.clip_distances = distance_from_clip_rect_impl(position, content_mask);
     out.shape_origin = shadow_input.bounds_origin;
     out.shape_size = shadow_input.bounds_size;
     return out;
@@ -1326,14 +1341,15 @@ fn vs_underline(@builtin(vertex_index) vertex_id: u32, underline: UnderlineVerte
     color_hsla.l = underline.color.z;
     color_hsla.a = underline.color.w;
 
+    let position = clipped_position(unit_vertex, bounds, content_mask);
     var out = UnderlineVarying();
-    out.position = to_device_position(unit_vertex, bounds);
+    out.position = to_device_position_impl(position);
     out.color = hsla_to_rgba(color_hsla);
     out.bounds_origin = bounds.origin;
     out.bounds_size = bounds.size;
     out.thickness = underline.thickness;
     out.wavy = underline.wavy;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, content_mask);
+    out.clip_distances = distance_from_clip_rect_impl(position, content_mask);
     return out;
 }
 
