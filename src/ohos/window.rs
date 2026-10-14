@@ -14,7 +14,8 @@ use openharmony_ability::{
     XComponentInputEvent,
     arkui::arkui_input_binding::{UIInputAction, UIInputToolType},
     xcomponent::{
-        MouseAction, MouseButton as OhosMouseButton, TouchEvent as OhosTouchEvent, TouchEventData,
+        Action as OhosKeyAction, KeyCode, KeyEventData, MouseAction,
+        MouseButton as OhosMouseButton, TouchEvent as OhosTouchEvent, TouchEventData,
         TouchPointData,
     },
 };
@@ -24,13 +25,14 @@ use super::display::OhosDisplay;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
-    Bounds, Capslock, DevicePixels, ForegroundExecutor, GestureTuning, GpuSpecs, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, ScrollDelta,
-    ScrollWheelEvent, Size, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
-    WindowDecorations, WindowParams, WindowVisibility, point, px, size,
+    Bounds, Capslock, DevicePixels, ForegroundExecutor, GestureTuning, GpuSpecs, KeyDownEvent,
+    KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size,
+    TextInputStateChange, TouchEvent, TouchId, TouchPhase, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, WindowVisibility, point, px, size,
 };
 
 pub(crate) struct OhosWindow {
@@ -46,6 +48,8 @@ pub(crate) struct OhosWindow {
     keyboard_visible: Rc<Cell<bool>>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pressed_mouse_button: Cell<Option<MouseButton>>,
+    modifiers: Cell<Modifiers>,
+    capslock: Cell<bool>,
     active_touches: RefCell<HashMap<i32, TouchId>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
     next_touch_id: Cell<u64>,
@@ -140,6 +144,8 @@ impl OhosWindow {
             keyboard_visible: Rc::new(Cell::new(false)),
             pointer_position: Cell::new(None),
             pressed_mouse_button: Cell::new(None),
+            modifiers: Cell::new(Modifiers::default()),
+            capslock: Cell::new(false),
             active_touches: RefCell::new(HashMap::new()),
             touch_tap_candidates: RefCell::new(HashMap::new()),
             next_touch_id: Cell::new(0),
@@ -960,7 +966,75 @@ impl OhosWindow {
             InputEvent::XComponent(XComponentInputEvent::Touch(touch_event)) => {
                 self.dispatch_raw_touch_event(touch_event);
             }
-            InputEvent::XComponent(XComponentInputEvent::Key(_)) => {}
+            InputEvent::XComponent(XComponentInputEvent::Key(key)) => self.dispatch_key(key),
+        }
+    }
+
+    /// A key of the physical keyboard. The modifier keys only change what the
+    /// next keys mean; the rest reach GPUI as keystrokes, typed text included.
+    fn dispatch_key(&self, event: &KeyEventData) {
+        let pressed = matches!(event.action, OhosKeyAction::Down);
+        let mut modifiers = self.modifiers.get();
+        let before = (modifiers, self.capslock.get());
+        match event.code {
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => modifiers.shift = pressed,
+            KeyCode::CtrlLeft | KeyCode::CtrlRight => modifiers.control = pressed,
+            KeyCode::AltLeft | KeyCode::AltRight => modifiers.alt = pressed,
+            KeyCode::MetaLeft | KeyCode::MetaRight => modifiers.platform = pressed,
+            KeyCode::CapsLock if pressed => self.capslock.set(!self.capslock.get()),
+            _ => {}
+        }
+        self.modifiers.set(modifiers);
+        if (modifiers, self.capslock.get()) != before {
+            self.dispatch_input(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                modifiers,
+                capslock: Capslock {
+                    on: self.capslock.get(),
+                },
+            }));
+            return;
+        }
+        // Caps lock turns letters upper case, and shift turns them back.
+        let upper = modifiers.shift != self.capslock.get();
+        let Some(key) = super::keys::key(event.code, modifiers.shift) else {
+            return;
+        };
+        let shifted_text = key.text.map(|text| {
+            if text.len() == 1 && text.as_bytes()[0].is_ascii_alphabetic() {
+                if upper {
+                    text.to_ascii_uppercase()
+                } else {
+                    text.to_ascii_lowercase()
+                }
+            } else {
+                text.to_owned()
+            }
+        });
+        // Typing is text only without a command modifier held.
+        let typing = !(modifiers.control || modifiers.platform || modifiers.alt);
+        let keystroke = Keystroke {
+            modifiers,
+            key: key.name.to_owned(),
+            key_char: shifted_text.filter(|_| typing),
+        };
+        let typed = keystroke.key_char.clone().filter(|_| pressed);
+        let result = self.dispatch_input(if pressed {
+            PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            })
+        } else {
+            PlatformInput::KeyUp(KeyUpEvent { keystroke })
+        });
+        // GPUI leaves typed text to the platform: it goes to the focused
+        // input unless a key binding took the key.
+        if let Some(text) = typed
+            && result.propagate
+            && !result.default_prevented
+            && let Some(handler) = self.input_handler.borrow_mut().as_mut()
+        {
+            handler.replace_text_in_range(None, &text);
         }
     }
 
@@ -1244,11 +1318,13 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn modifiers(&self) -> Modifiers {
-        Modifiers::default()
+        self.modifiers.get()
     }
 
     fn capslock(&self) -> Capslock {
-        Capslock::default()
+        Capslock {
+            on: self.capslock.get(),
+        }
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {

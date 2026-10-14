@@ -1,6 +1,7 @@
 mod dispatcher;
 mod display;
 mod keyboard;
+mod keys;
 mod platform;
 mod text_system;
 mod wgpu_atlas;
