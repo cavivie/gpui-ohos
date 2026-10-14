@@ -1,0 +1,396 @@
+--- a/wgpu-hal/src/gles/mod.rs
++++ b/wgpu-hal/src/gles/mod.rs
+@@ -465,6 +465,8 @@
+ #[derive(Debug)]
+ pub struct Texture {
+     pub inner: TextureInner,
++    #[cfg(target_env = "ohos")]
++    pub window_surface: Option<usize>,
+     pub mip_level_count: u32,
+     pub array_layer_count: u32,
+     pub format: wgt::TextureFormat,
+@@ -489,6 +491,8 @@
+     pub fn default_framebuffer(format: wgt::TextureFormat) -> Self {
+         Self {
+             inner: TextureInner::DefaultRenderbuffer,
++            #[cfg(target_env = "ohos")]
++            window_surface: None,
+             drop_guard: None,
+             mip_level_count: 1,
+             array_layer_count: 1,
+@@ -1209,3 +1213,7 @@
+         }
+     }
+ }
++
++fn direct_window() -> bool {
++    cfg!(target_env = "ohos") && option_env!("NSDIRECT") == Some("1")
++}
+--- a/wgpu-hal/src/gles/device.rs
++++ b/wgpu-hal/src/gles/device.rs
+@@ -137,6 +137,8 @@
+         drop_callback: Option<crate::DropCallback>,
+     ) -> super::Texture {
+         super::Texture {
++            #[cfg(target_env = "ohos")]
++            window_surface: None,
+             inner: super::TextureInner::Texture {
+                 raw: glow::NativeTexture(name),
+                 target: super::Texture::get_info_from_desc(desc),
+@@ -164,6 +166,8 @@
+         drop_callback: Option<crate::DropCallback>,
+     ) -> super::Texture {
+         super::Texture {
++            #[cfg(target_env = "ohos")]
++            window_surface: None,
+             inner: super::TextureInner::Renderbuffer {
+                 raw: glow::NativeRenderbuffer(name),
+             },
+@@ -1093,6 +1097,8 @@
+         self.counters.textures.add(1);
+ 
+         Ok(super::Texture {
++            #[cfg(target_env = "ohos")]
++            window_surface: None,
+             inner,
+             drop_guard: None,
+             mip_level_count: desc.mip_level_count,
+--- a/wgpu-hal/src/gles/egl.rs
++++ b/wgpu-hal/src/gles/egl.rs
+@@ -315,6 +315,10 @@
+     /// do rendering.
+     #[track_caller]
+     pub fn lock<'a>(&'a self) -> AdapterContextLock<'a> {
++        self.lock_for_surface(None)
++    }
++
++    pub(super) fn lock_for_surface(&self, surface: Option<usize>) -> AdapterContextLock<'_> {
+         let glow = self
+             .glow
+             // Don't lock forever. If it takes longer than 1 second to get the lock we've got a
+@@ -323,7 +327,15 @@
+             .expect("Could not lock adapter context. This is most-likely a deadlock.");
+ 
+         let egl = self.egl.as_ref().map(|egl| {
+-            egl.make_current();
++            if let Some(surface) = surface {
++                let surface =
++                    unsafe { khronos_egl::Surface::from_ptr(surface as *mut ffi::c_void) };
++                egl.instance
++                    .make_current(egl.display, Some(surface), Some(surface), Some(egl.raw))
++                    .unwrap();
++            } else {
++                egl.make_current();
++            }
+             EglContextLock {
+                 instance: &egl.instance,
+                 display: egl.display,
+@@ -1102,8 +1114,8 @@
+ pub struct Swapchain {
+     surface: khronos_egl::Surface,
+     wl_window: Option<*mut ffi::c_void>,
+-    framebuffer: glow::Framebuffer,
+-    renderbuffer: glow::Renderbuffer,
++    framebuffer: Option<glow::Framebuffer>,
++    renderbuffer: Option<glow::Renderbuffer>,
+     /// Extent because the window lies
+     extent: wgt::Extent3d,
+     format: wgt::TextureFormat,
+@@ -1151,41 +1163,43 @@
+                 crate::SurfaceError::Lost
+             })?;
+ 
+-        unsafe { gl.disable(glow::SCISSOR_TEST) };
+-        unsafe { gl.color_mask(true, true, true, true) };
+-
+-        unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None) };
+-        unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(sc.framebuffer)) };
+-
+-        if !matches!(self.srgb_kind, SrgbFrameBufferKind::None) {
+-            // Disable sRGB conversions for `glBlitFramebuffer` as behavior does diverge between
+-            // drivers and formats otherwise and we want to ensure no sRGB conversions happen.
+-            unsafe { gl.disable(glow::FRAMEBUFFER_SRGB) };
+-        }
+-
+-        // Note the Y-flipping here. GL's presentation is not flipped,
+-        // but main rendering is. Therefore, we Y-flip the output positions
+-        // in the shader, and also this blit.
+-        unsafe {
+-            gl.blit_framebuffer(
+-                0,
+-                sc.extent.height as i32,
+-                sc.extent.width as i32,
+-                0,
+-                0,
+-                0,
+-                sc.extent.width as i32,
+-                sc.extent.height as i32,
+-                glow::COLOR_BUFFER_BIT,
+-                glow::NEAREST,
+-            )
+-        };
+-
+-        if !matches!(self.srgb_kind, SrgbFrameBufferKind::None) {
+-            unsafe { gl.enable(glow::FRAMEBUFFER_SRGB) };
+-        }
+-
+-        unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
++        if !super::direct_window() {
++            unsafe { gl.disable(glow::SCISSOR_TEST) };
++            unsafe { gl.color_mask(true, true, true, true) };
++
++            unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None) };
++            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, sc.framebuffer) };
++
++            if !matches!(self.srgb_kind, SrgbFrameBufferKind::None) {
++                // Disable sRGB conversions for `glBlitFramebuffer` as behavior does diverge between
++                // drivers and formats otherwise and we want to ensure no sRGB conversions happen.
++                unsafe { gl.disable(glow::FRAMEBUFFER_SRGB) };
++            }
++
++            // Note the Y-flipping here. GL's presentation is not flipped,
++            // but main rendering is. Therefore, we Y-flip the output positions
++            // in the shader, and also this blit.
++            unsafe {
++                gl.blit_framebuffer(
++                    0,
++                    sc.extent.height as i32,
++                    sc.extent.width as i32,
++                    0,
++                    0,
++                    0,
++                    sc.extent.width as i32,
++                    sc.extent.height as i32,
++                    glow::COLOR_BUFFER_BIT,
++                    glow::NEAREST,
++                )
++            };
++
++            if !matches!(self.srgb_kind, SrgbFrameBufferKind::None) {
++                unsafe { gl.enable(glow::FRAMEBUFFER_SRGB) };
++            }
++
++            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
++        }
+ 
+         self.egl
+             .instance
+@@ -1213,8 +1227,12 @@
+         let gl = &device.shared.context.lock();
+         match self.swapchain.write().take() {
+             Some(sc) => {
+-                unsafe { gl.delete_renderbuffer(sc.renderbuffer) };
+-                unsafe { gl.delete_framebuffer(sc.framebuffer) };
++                if let Some(raw) = sc.renderbuffer {
++                    unsafe { gl.delete_renderbuffer(raw) };
++                }
++                if let Some(raw) = sc.framebuffer {
++                    unsafe { gl.delete_framebuffer(raw) };
++                }
+                 Some((sc.surface, sc.wl_window))
+             }
+             None => None,
+@@ -1394,34 +1412,45 @@
+ 
+         let format_desc = device.shared.describe_texture_format(config.format);
+         let gl = &device.shared.context.lock();
+-        let renderbuffer = unsafe { gl.create_renderbuffer() }.map_err(|error| {
+-            log::error!("Internal swapchain renderbuffer creation failed: {error}");
+-            crate::DeviceError::OutOfMemory
+-        })?;
+-        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, Some(renderbuffer)) };
+-        unsafe {
+-            gl.renderbuffer_storage(
+-                glow::RENDERBUFFER,
+-                format_desc.internal,
+-                config.extent.width as _,
+-                config.extent.height as _,
+-            )
++        let (renderbuffer, framebuffer) = if super::direct_window() {
++            (None, None)
++        } else {
++            let renderbuffer = unsafe { gl.create_renderbuffer() }.map_err(|error| {
++                log::error!("Internal swapchain renderbuffer creation failed: {error}");
++                crate::DeviceError::OutOfMemory
++            })?;
++            unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, Some(renderbuffer)) };
++            unsafe {
++                gl.renderbuffer_storage(
++                    glow::RENDERBUFFER,
++                    format_desc.internal,
++                    config.extent.width as _,
++                    config.extent.height as _,
++                )
++            };
++            let framebuffer = unsafe { gl.create_framebuffer() }.map_err(|error| {
++                log::error!("Internal swapchain framebuffer creation failed: {error}");
++                crate::DeviceError::OutOfMemory
++            })?;
++            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer)) };
++            unsafe {
++                gl.framebuffer_renderbuffer(
++                    glow::READ_FRAMEBUFFER,
++                    glow::COLOR_ATTACHMENT0,
++                    glow::RENDERBUFFER,
++                    Some(renderbuffer),
++                )
++            };
++            unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
++            unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
++            (Some(renderbuffer), Some(framebuffer))
+         };
+-        let framebuffer = unsafe { gl.create_framebuffer() }.map_err(|error| {
+-            log::error!("Internal swapchain framebuffer creation failed: {error}");
+-            crate::DeviceError::OutOfMemory
+-        })?;
+-        unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer)) };
+-        unsafe {
+-            gl.framebuffer_renderbuffer(
+-                glow::READ_FRAMEBUFFER,
+-                glow::COLOR_ATTACHMENT0,
+-                glow::RENDERBUFFER,
+-                Some(renderbuffer),
+-            )
+-        };
+-        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
+-        unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
++        log::info!(
++            "NSDIRECT,enabled={},width={},height={}",
++            super::direct_window(),
++            config.extent.width,
++            config.extent.height
++        );
+ 
+         let mut swapchain = self.swapchain.write();
+         *swapchain = Some(Swapchain {
+@@ -1465,9 +1494,15 @@
+             "Surface has no swap-chain configured",
+         ))?;
+         let texture = super::Texture {
+-            inner: super::TextureInner::Renderbuffer {
+-                raw: sc.renderbuffer,
++            inner: if super::direct_window() {
++                super::TextureInner::DefaultRenderbuffer
++            } else {
++                super::TextureInner::Renderbuffer {
++                    raw: sc.renderbuffer.expect("baseline renderbuffer"),
++                }
+             },
++            #[cfg(target_env = "ohos")]
++            window_surface: super::direct_window().then_some(sc.surface.as_ptr() as usize),
+             drop_guard: None,
+             array_layer_count: 1,
+             mip_level_count: 1,
+--- a/wgpu-hal/src/gles/queue.rs
++++ b/wgpu-hal/src/gles/queue.rs
+@@ -1907,6 +1907,19 @@
+         (signal_fence, signal_value): (&super::Fence, crate::FenceValue),
+     ) -> Result<(), crate::DeviceError> {
+         let shared = Arc::clone(&self.shared);
++        #[cfg(target_env = "ohos")]
++        let gl = &{
++            let mut surfaces = _surface_textures
++                .iter()
++                .filter_map(|texture| texture.window_surface);
++            let surface = surfaces.next();
++            assert!(
++                surfaces.all(|other| Some(other) == surface),
++                "prototype cannot submit multiple window framebuffers together"
++            );
++            shared.context.lock_for_surface(surface)
++        };
++        #[cfg(not(target_env = "ohos"))]
+         let gl = &shared.context.lock();
+         for cmd_buf in command_buffers.iter() {
+             // The command encoder assumes a default state when encoding the command buffer.
+@@ -1944,6 +1957,20 @@
+             }
+         }
+ 
++        #[cfg(target_env = "ohos")]
++        if !_surface_textures.is_empty() {
++            static CHECKED: std::sync::atomic::AtomicBool =
++                std::sync::atomic::AtomicBool::new(false);
++            if !CHECKED.swap(true, Ordering::Relaxed) {
++                log::info!(
++                    "NSDIRECT_VERIFY,direct={},fbo={},error={}",
++                    super::direct_window(),
++                    unsafe { gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) },
++                    unsafe { gl.get_error() }
++                );
++            }
++        }
++
+         signal_fence.maintain(gl);
+         signal_fence.signal(gl, signal_value)?;
+ 
+--- a/wgpu-hal/src/gles/command.rs
++++ b/wgpu-hal/src/gles/command.rs
+@@ -28,6 +28,7 @@
+     samplers: [Option<glow::Sampler>; super::MAX_SAMPLERS],
+     texture_slots: [TextureSlotDesc; super::MAX_TEXTURE_SLOTS],
+     render_size: wgt::Extent3d,
++    direct_target: bool,
+     resolve_attachments: ArrayVec<(u32, super::TextureView), { crate::MAX_COLOR_ATTACHMENTS }>,
+     invalidate_attachments: ArrayVec<u32, { crate::MAX_COLOR_ATTACHMENTS + 2 }>,
+     has_pass_label: bool,
+@@ -58,6 +59,7 @@
+             samplers: Default::default(),
+             texture_slots: Default::default(),
+             render_size: Default::default(),
++            direct_target: false,
+             resolve_attachments: Default::default(),
+             invalidate_attachments: Default::default(),
+             has_pass_label: Default::default(),
+@@ -510,6 +512,17 @@
+         }
+ 
+         self.state.render_size = desc.extent;
++        self.state.direct_target = super::direct_window()
++            && desc
++                .color_attachments
++                .first()
++                .and_then(|a| a.as_ref())
++                .is_some_and(|a| {
++                    matches!(
++                        a.target.view.inner,
++                        super::TextureInner::DefaultRenderbuffer
++                    )
++                });
+         self.state.resolve_attachments.clear();
+         self.state.invalidate_attachments.clear();
+         if let Some(label) = desc.label {
+@@ -527,6 +540,7 @@
+                 super::TextureInner::ExternalFramebuffer { .. } => true,
+                 #[cfg(native)]
+                 super::TextureInner::ExternalNativeFramebuffer { .. } => true,
++                super::TextureInner::DefaultRenderbuffer => super::direct_window(),
+                 _ => false,
+             });
+ 
+@@ -1048,7 +1062,11 @@
+         self.cmd_buffer.commands.push(C::SetViewport {
+             rect: crate::Rect {
+                 x: rect.x as i32,
+-                y: rect.y as i32,
++                y: if self.state.direct_target {
++                    self.state.render_size.height as i32 - (rect.y as i32 + rect.h as i32)
++                } else {
++                    rect.y as i32
++                },
+                 w: rect.w as i32,
+                 h: rect.h as i32,
+             },
+@@ -1058,7 +1076,11 @@
+     unsafe fn set_scissor_rect(&mut self, rect: &crate::Rect<u32>) {
+         self.cmd_buffer.commands.push(C::SetScissor(crate::Rect {
+             x: rect.x as i32,
+-            y: rect.y as i32,
++            y: if self.state.direct_target {
++                self.state.render_size.height as i32 - (rect.y as i32 + rect.h as i32)
++            } else {
++                rect.y as i32
++            },
+             w: rect.w as i32,
+             h: rect.h as i32,
+         }));

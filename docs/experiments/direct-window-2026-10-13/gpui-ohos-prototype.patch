@@ -1,0 +1,97 @@
+--- a/src/ohos/wgpu_renderer.rs
++++ b/src/ohos/wgpu_renderer.rs
+@@ -1146,10 +1146,11 @@
+             } else {
+                 0
+             },
+-            pad: 0,
++            pad: u32::from(option_env!("NSDIRECT") == Some("1")),
+         };
+         let path_globals = GlobalParams {
+             premultiplied_alpha: 0,
++            pad: 0,
+             ..globals
+         };
+ 
+--- a/src/ohos/shaders.wgsl
++++ b/src/ohos/shaders.wgsl
+@@ -159,7 +159,7 @@
+ 
+ fn to_device_position_impl(position: vec2<f32>) -> vec4<f32> {
+     let device_position = position / globals.viewport_size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
+-    return vec4<f32>(device_position, 0.0, 1.0);
++    return vec4<f32>(device_position.x, select(device_position.y, -device_position.y, globals.pad != 0u), 0.0, 1.0);
+ }
+ 
+ fn to_device_position(unit_vertex: vec2<f32>, bounds: Bounds) -> vec4<f32> {
+@@ -649,7 +649,7 @@
+ 
+     var background_color = input.background_solid;
+     if (!SOLID_QUAD) {
+-        background_color = gradient_color(background, input.position.xy, bounds,
++        background_color = gradient_color(background, fragment_position(input.position.xy), bounds,
+             input.background_solid, input.background_color0, input.background_color1);
+     }
+ 
+@@ -673,7 +673,7 @@
+ 
+     let size = bounds.size;
+     let half_size = size / 2.0;
+-    let point = input.position.xy - bounds.origin;
++    let point = fragment_position(input.position.xy) - bounds.origin;
+     let center_to_point = point - half_size;
+ 
+     // Signed distance field threshold for inclusion of pixels. 0.5 is the
+@@ -1108,7 +1108,7 @@
+     let size = input.shape_size;
+     let half_size = size / 2.0;
+     let center = origin + half_size;
+-    let point = input.position.xy - center;
++    let point = fragment_position(input.position.xy) - center;
+     let max_corner = min(half_size.x, half_size.y);
+     var clamped_corner_radii = corner_radii;
+     clamped_corner_radii.top_left = min(clamped_corner_radii.top_left, max_corner);
+@@ -1120,7 +1120,7 @@
+     var alpha: f32;
+     if (input.blur_radius == 0.0) {
+         let bounds = Bounds(origin, size);
+-        let distance = quad_sdf(input.position.xy, bounds, clamped_corner_radii);
++        let distance = quad_sdf(fragment_position(input.position.xy), bounds, clamped_corner_radii);
+         alpha = saturate(0.5 - distance);
+     } else {
+         // The signal is only non-zero in a limited range, so don't waste samples
+@@ -1255,7 +1255,7 @@
+         background.solid,
+         background.colors,
+     );
+-    let color = gradient_color(background, input.position.xy, bounds,
++    let color = gradient_color(background, fragment_position(input.position.xy), bounds,
+         gradient_color_result.solid, gradient_color_result.color0, gradient_color_result.color1);
+     return vec4<f32>(color.rgb * color.a * alpha, color.a * alpha);
+ }
+@@ -1370,7 +1370,7 @@
+ 
+     let half_thickness = input.thickness * 0.5;
+ 
+-    let st = (input.position.xy - input.bounds_origin) / input.bounds_size.y - vec2<f32>(0.0, 0.5);
++    let st = (fragment_position(input.position.xy) - input.bounds_origin) / input.bounds_size.y - vec2<f32>(0.0, 0.5);
+     let frequency = M_PI_F * WAVE_FREQUENCY * input.thickness / input.bounds_size.y;
+     let amplitude = (input.thickness * WAVE_HEIGHT_RATIO) / input.bounds_size.y;
+ 
+@@ -1544,7 +1544,7 @@
+     corner_radii.bottom_right = input.corner_radii.z;
+     corner_radii.bottom_left = input.corner_radii.w;
+ 
+-    let distance = quad_sdf(input.position.xy, bounds, corner_radii);
++    let distance = quad_sdf(fragment_position(input.position.xy), bounds, corner_radii);
+ 
+     var color = sample;
+     if ((input.grayscale & 0xFFu) != 0u) {
+@@ -1604,3 +1604,7 @@
+ 
+     return ycbcr_to_RGB * y_cb_cr;
+ }
++
++fn fragment_position(position: vec2<f32>) -> vec2<f32> {
++    return vec2<f32>(position.x, select(position.y, globals.viewport_size.y - position.y, globals.pad != 0u));
++}

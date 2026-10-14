@@ -1,0 +1,17 @@
+{
+  "baseline-a-settings-top vs direct-a-settings-top": {
+    "pixels": 3074400,
+    "different_pixels": 0,
+    "max_channel_difference": 0
+  },
+  "baseline-b-settings-top vs direct-b-settings-top": {
+    "pixels": 3074400,
+    "different_pixels": 0,
+    "max_channel_difference": 0
+  },
+  "path-baseline vs path-direct": {
+    "pixels": 3074400,
+    "different_pixels": 0,
+    "max_channel_difference": 0
+  }
+}
