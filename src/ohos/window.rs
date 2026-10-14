@@ -1637,6 +1637,10 @@ impl OhosWindow {
 
         *self.fallback_atlas.borrow_mut() = Some(renderer.sprite_atlas().clone());
         *renderer_guard = Some(renderer);
+        // Zed can open its first window after SurfaceCreate was already delivered.
+        // Bootstrap frame delivery from the native surface initialized above.
+        self.surface_available.set(true);
+        self.sync_frame_delivery();
         self.force_render.set(true);
         self.schedule_frame();
         debug!("OhosWindow: Renderer initialized successfully");
@@ -2100,7 +2104,42 @@ impl OhosWindow {
                                     return;
                                 }
 
-                                if let Some(selection) = handler.selected_text_range(true) {
+                                let selection = handler.selected_text_range(true);
+                                let has_editable_text =
+                                    selection.as_ref().is_some_and(|selection| {
+                                        handler
+                                            .text_for_range(selection.range.clone(), &mut None)
+                                            .is_some()
+                                    });
+                                if !has_editable_text {
+                                    // Terminals expose an IME cursor without editable backing text.
+                                    // Let their key handlers encode deletion for the PTY.
+                                    // Dispatch can re-enter input handling, so release the borrow first.
+                                    drop(handler_guard);
+                                    for _ in 0..len {
+                                        let keystroke = Keystroke {
+                                            key: if forward { "delete" } else { "backspace" }
+                                                .into(),
+                                            key_char: None,
+                                            modifiers: Modifiers::default(),
+                                        };
+                                        Self::dispatch_input_with_callbacks(
+                                            &callbacks,
+                                            PlatformInput::KeyDown(KeyDownEvent {
+                                                keystroke: keystroke.clone(),
+                                                is_held: false,
+                                                prefer_character_input: false,
+                                            }),
+                                        );
+                                        Self::dispatch_input_with_callbacks(
+                                            &callbacks,
+                                            PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+                                        );
+                                    }
+                                    return;
+                                }
+
+                                if let Some(selection) = selection {
                                     let range = if selection.range.start != selection.range.end {
                                         selection.range
                                     } else {

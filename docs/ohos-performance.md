@@ -63,6 +63,9 @@ unchanged at `f45c7c22d0`.
   contiguous run, preserving scene order, clipping, blending and antialiasing.
   Resolved multisample path attachments use `StoreOp::Discard`; sample count
   and resolution are unchanged.
+- Windows allocate path attachments on first path use, reuse them across frames,
+  and invalidate them on resize. Windows that never draw paths avoid these
+  full-size textures; see [memory measurements and first-use cost](path-target-memory-2026-10-13.md).
 - `WgpuContext` owns common shader/layout handles and caches pipelines by surface
   format, alpha mode, path sample count and dual-source blending. Window buffers,
   uniforms and surface textures retain their existing ownership; atlas reuse

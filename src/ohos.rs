@@ -6,6 +6,7 @@ mod display;
 mod frame_delivery;
 mod frame_demand;
 mod keyboard;
+mod path_targets;
 mod platform;
 mod presentation;
 mod quad_pipeline;

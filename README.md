@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Remove this line to confirm you've reviewed this PR before submitting.
+
 # gpui-ohos
 
 OpenHarmony platform backend for GPUI.
@@ -21,6 +24,13 @@ OpenHarmony Ability and its Rust plugins use the
 branch. Rust crates and ArkTS packages share the example's initialized
 `openharmony-ability` submodule; its Git entry pins the exact commit. Run
 `git submodule update --init --recursive` before building.
+
+The pinned Ability revision uses published ArkUI `0.4.2`, XComponent `0.5.2`,
+and IME `0.3.1` bindings. GPUI enables Ability's `keyboard`, `mouse`, and `drag`
+features for hardware key delivery, native mouse cancellation, and file drag/drop.
+Ability's `mouse` feature forwards XComponent's `api-18`, so GPUI uses Ability's
+re-exported XComponent types without a direct XComponent binding dependency.
+The crate and example need no crates.io patches or neighboring local binding checkout.
 
 ## Touch input and rendering
 
